@@ -995,12 +995,13 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
 
 
 def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
-    """Scrape product reviews for each product.
+    """Scrape product reviews from a Squarespace store.
 
-    Tries multiple strategies:
-    1. Squarespace review API endpoints (per product)
-    2. Site-wide reviews page (scrapes all reviews at once)
-    3. Individual product page HTML fallback
+    Strategy: Squarespace shows *store-wide* reviews on every product
+    page.  Instead of fetching all 76+ pages, we fetch ONE product page,
+    extract all reviews, and map each to the right product via its
+    ``productLink`` href.  Only falls back to per-product fetching if the
+    first page yields nothing.
 
     Returns a flat list of review dicts.
     """
@@ -1024,91 +1025,68 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
     # Cool down after product scraping to let rate limits reset
     _limiter.cooldown(20)
 
-    # --- Per-product scrape (reviews live on product pages) ----------------
-    # Log the first product's API response to diagnose endpoint issues
-    first_api_logged = False
+    # ------------------------------------------------------------------
+    # Method 1: Fetch ONE product page and get all store-wide reviews
+    # ------------------------------------------------------------------
+    # Squarespace displays all store reviews on every product page.
+    # We just need one page with a URL to grab them all.
+    store_reviews_found = False
+    products_with_urls = [p for p in products if p.get("url")]
 
-    for product in products:
-        product_id = product.get("id", "")
-        product_title = product.get("title", "")
-        product_handle = product.get("handle", "")
+    for probe_product in products_with_urls[:3]:  # try up to 3 pages
+        probe_url = probe_product["url"]
+        logger.info("Fetching reviews from product page: %s", probe_url)
+        html = _get_html(session, probe_url)
+        if not html:
+            logger.warning("Could not fetch %s for reviews", probe_url)
+            _limiter.wait()
+            continue
 
-        reviews = []
+        # Check if the page has a reviews container
+        if "reviewsContainer" not in html and "reviewDetails" not in html:
+            logger.info("No review container found on %s", probe_url)
+            _limiter.wait()
+            continue
 
-        # Method 1: Squarespace review API endpoints
-        # Use JSON-specific headers for API calls
-        api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
-        api_paths = [
-            f"/api/commerce/reviews/published?productId={product_id}",
-            f"/api/commerce/reviews?productId={product_id}&status=PUBLISHED",
-            f"/api/review/public/reviews?productId={product_id}",
-        ]
+        reviews = _scrape_reviews_from_html(html, "", "")
+        if reviews:
+            # Enrich reviews: fill in product titles from handle lookup
+            for r in reviews:
+                handle = r.get("product_handle", "")
+                if handle and handle in handle_titles:
+                    r["product_title"] = handle_titles[handle]
+            _add_reviews(reviews)
+            logger.info(
+                "Found %d store-wide reviews from %s",
+                len(reviews), probe_url,
+            )
+            store_reviews_found = True
+            break
+        else:
+            logger.info("Review container found but parsing yielded 0 on %s", probe_url)
 
-        for api_path in api_paths:
-            api_url = f"{base_url}{api_path}"
-            try:
-                resp = session.get(api_url, headers=api_headers, timeout=15)
+        _limiter.wait()
 
-                if not first_api_logged:
-                    logger.info(
-                        "Review API probe: %s → %d (%.0f bytes)",
-                        api_path.split("?")[0], resp.status_code,
-                        len(resp.content),
-                    )
+    # ------------------------------------------------------------------
+    # Method 2 (fallback): Per-product HTML scrape
+    # ------------------------------------------------------------------
+    # Only runs if Method 1 found nothing.
+    if not store_reviews_found:
+        logger.info("Store-wide reviews not found, trying per-product scrape")
+        for product in products:
+            product_title = product.get("title", "")
+            product_handle = product.get("handle", "")
 
-                if resp.status_code == 429:
-                    retry_after = float(resp.headers.get("Retry-After", 0))
-                    _limiter.on_rate_limit(retry_after)
-                    logger.warning("Review API 429 for %s", product_title)
-                    break  # stop trying more endpoints for this product
-
-                if resp.status_code == 404 or resp.status_code == 403:
-                    continue  # try next endpoint
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Squarespace may wrap in {"reviews": [...]} or return
-                    # a bare list; also check for {"items": [...]}
-                    review_list = (
-                        data if isinstance(data, list)
-                        else data.get("reviews", data.get("items", []))
-                    )
-                    if not first_api_logged:
-                        logger.info(
-                            "Review API returned %d review(s) for %s",
-                            len(review_list), product_title,
-                        )
-                    for r in review_list:
-                        reviews.append(_normalise_review(r, product_title, product_handle))
-                    if reviews:
-                        break
-            except Exception as exc:
-                if not first_api_logged:
-                    logger.warning("Review API error for %s: %s", api_path, exc)
+            if not product.get("url"):
                 continue
 
-        first_api_logged = True
-
-        # Method 2: Scrape reviews from product page HTML
-        # (fallback – often empty because reviews are JS-rendered)
-        if not reviews and product.get("url"):
             html = _get_html(session, product["url"])
             if html:
                 reviews = _scrape_reviews_from_html(html, product_title, product_handle)
-                if not reviews:
-                    # Check if the page even has a review container
-                    has_container = "reviewsContainer" in html or "reviewDetails" in html
-                    if has_container:
-                        logger.info(
-                            "Review HTML container found but empty for %s "
-                            "(reviews may be JS-rendered)",
-                            product_title,
-                        )
-
-        _add_reviews(reviews)
-        if reviews:
-            logger.info("Found %d reviews for %s", len(reviews), product_title)
-        _limiter.wait()
+                _add_reviews(reviews)
+                if reviews:
+                    logger.info("Found %d reviews for %s", len(reviews), product_title)
+            _limiter.wait()
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
     return all_reviews
