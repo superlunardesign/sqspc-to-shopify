@@ -507,42 +507,39 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                     logger.info("Scraped product (HTML): %s", p["title"])
                     time.sleep(0.5)
 
-    # ----- Crawl sub-category pages for any missed products ----------------
-    listing_html = _get_html(session, f"{base_url}{shop_path}")
-    if listing_html:
-        cat_paths = _scrape_category_paths_from_html(listing_html)
-        for cat_path in cat_paths:
-            # Skip the "All" page (same as shop_path)
-            if cat_path.rstrip("/") == shop_path.rstrip("/"):
-                continue
+            # Only crawl sub-categories when using HTML fallback, since
+            # the JSON API's "All" collection already returns every product.
+            cat_paths = _scrape_category_paths_from_html(listing_html)
+            for cat_path in cat_paths:
+                if cat_path.rstrip("/") == shop_path.rstrip("/"):
+                    continue
 
-            cat_url = f"{base_url}{cat_path}"
-            cat_data = _get_json(session, cat_url)
-            if cat_data and cat_data.get("items"):
-                for item in cat_data["items"]:
-                    item_id = item.get("id", "")
-                    if item_id in seen_ids:
-                        continue
-                    seen_ids.add(item_id)
-                    product = _process_product(session, base_url, item)
-                    if product:
-                        products.append(product)
-                        logger.info("Scraped product (category %s): %s", cat_path, product["title"])
-                    time.sleep(0.5)
-            else:
-                # HTML fallback for category pages
-                cat_html = _get_html(session, cat_url)
-                if cat_html:
-                    html_products = _scrape_products_from_html(cat_html, base_url)
-                    for p in html_products:
-                        if p["id"] not in seen_ids:
-                            seen_ids.add(p["id"])
-                            p = _enrich_product_from_html(session, p)
-                            products.append(p)
-                            logger.info("Scraped product (HTML cat %s): %s", cat_path, p["title"])
-                            time.sleep(0.5)
+                cat_url = f"{base_url}{cat_path}"
+                cat_data = _get_json(session, cat_url)
+                if cat_data and cat_data.get("items"):
+                    for item in cat_data["items"]:
+                        item_id = item.get("id", "")
+                        if item_id in seen_ids:
+                            continue
+                        seen_ids.add(item_id)
+                        product = _process_product(session, base_url, item)
+                        if product:
+                            products.append(product)
+                            logger.info("Scraped product (category %s): %s", cat_path, product["title"])
+                        time.sleep(0.5)
+                else:
+                    cat_html = _get_html(session, cat_url)
+                    if cat_html:
+                        html_products = _scrape_products_from_html(cat_html, base_url)
+                        for p in html_products:
+                            if p["id"] not in seen_ids:
+                                seen_ids.add(p["id"])
+                                p = _enrich_product_from_html(session, p)
+                                products.append(p)
+                                logger.info("Scraped product (HTML cat %s): %s", cat_path, p["title"])
+                                time.sleep(0.5)
 
-            time.sleep(0.3)
+                time.sleep(0.3)
 
     logger.info("Scraped %d products total.", len(products))
     return products
