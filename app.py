@@ -102,7 +102,12 @@ def scrape():
                         "product_type": p.get("product_type", ""),
                         "sold_out": p.get("sold_out", False),
                         "variant_count": len(p.get("variants", [])),
-                        "description": (p.get("description", "") or "")[:200],
+                        "description": p.get("description", "") or "",
+                        "ingredients": p.get("ingredients", "") or "",
+                        "how_to_use": p.get("how_to_use", "") or "",
+                        "benefits": p.get("benefits", "") or "",
+                        "what_it_is": p.get("what_it_is", "") or "",
+                        "who_its_for": p.get("who_its_for", "") or "",
                     }
                     for p in products
                 ]

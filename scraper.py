@@ -78,10 +78,10 @@ _limiter = _RateLimiter()
 # Common heading patterns for structured product sections
 SECTION_PATTERNS = {
     "ingredients": re.compile(
-        r"ingredients?", re.IGNORECASE
+        r"(?:key\s+)?ingredients?", re.IGNORECASE
     ),
     "how_to_use": re.compile(
-        r"how\s+to\s+use|directions?|usage|instructions?", re.IGNORECASE
+        r"how\s+to\s+use|tips?\s+for\s+use|directions?|usage|instructions?", re.IGNORECASE
     ),
     "benefits": re.compile(
         r"benefits?|why\s+you.ll\s+love|why\s+clients?\s+love|features?", re.IGNORECASE

@@ -433,6 +433,68 @@
       color: var(--warning);
     }
 
+    /* ---- Expandable detail row ---- */
+    .detail-toggle {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.7rem;
+      padding: 2px 4px;
+      transition: transform 0.2s;
+    }
+
+    .detail-toggle.open { transform: rotate(90deg); color: var(--accent); }
+
+    tr.detail-row { display: none; }
+    tr.detail-row.open { display: table-row; }
+
+    tr.detail-row td {
+      padding: 0.75rem 1rem;
+      background: var(--bg);
+      border-bottom: 2px solid var(--border);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .detail-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.65rem 0.85rem;
+      position: relative;
+    }
+
+    .detail-section.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .detail-section-label {
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+      margin-bottom: 0.3rem;
+    }
+
+    .detail-section-text {
+      font-size: 0.8rem;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 768px) {
+      .detail-grid { grid-template-columns: 1fr; }
+    }
+
     .img-modal {
       display: none;
       position: fixed;
@@ -920,6 +982,7 @@
         <table class="product-table">
           <thead>
             <tr>
+              <th></th>
               <th>#</th>
               <th>Image</th>
               <th>Title</th>
@@ -1110,10 +1173,35 @@
       if (e.key === 'Escape') imgModal.classList.remove('open');
     });
 
+    const SECTION_META = [
+      { key: 'description',  label: 'Description',     fullWidth: true },
+      { key: 'ingredients',  label: 'Key Ingredients',  fullWidth: false },
+      { key: 'benefits',     label: 'Benefits',         fullWidth: false },
+      { key: 'how_to_use',   label: 'How to Use',       fullWidth: false },
+      { key: 'what_it_is',   label: 'What It Is',       fullWidth: false },
+      { key: 'who_its_for',  label: 'Who It\'s For',    fullWidth: false },
+    ];
+
     function renderProducts(products) {
       productTableBody.innerHTML = '';
+      const totalCols = 12; // expand + # + image + title + handle + vendor + price + sku + type + tags + variants + status
+
       products.forEach((p, i) => {
         const tr = document.createElement('tr');
+
+        // -- Expand toggle --
+        const expandTd = document.createElement('td');
+        expandTd.style.width = '28px';
+        expandTd.style.textAlign = 'center';
+        const hasDetail = SECTION_META.some(s => p[s.key]);
+        if (hasDetail) {
+          const toggleBtn = document.createElement('button');
+          toggleBtn.className = 'detail-toggle';
+          toggleBtn.innerHTML = '&#9654;';
+          toggleBtn.title = 'Show details';
+          expandTd.appendChild(toggleBtn);
+        }
+        tr.appendChild(expandTd);
 
         const numTd = document.createElement('td');
         numTd.textContent = i + 1;
@@ -1214,6 +1302,68 @@
         tr.appendChild(statusTd);
 
         productTableBody.appendChild(tr);
+
+        // -- Detail row (hidden by default) --
+        if (hasDetail) {
+          const detailTr = document.createElement('tr');
+          detailTr.className = 'detail-row';
+          const detailTd = document.createElement('td');
+          detailTd.colSpan = totalCols;
+
+          const grid = document.createElement('div');
+          grid.className = 'detail-grid';
+
+          SECTION_META.forEach(sec => {
+            const text = p[sec.key];
+            if (!text) return;
+            const block = document.createElement('div');
+            block.className = 'detail-section' + (sec.fullWidth ? ' full-width' : '');
+
+            const lbl = document.createElement('div');
+            lbl.className = 'detail-section-label';
+            lbl.textContent = sec.label;
+            block.appendChild(lbl);
+
+            const content = document.createElement('div');
+            content.className = 'detail-section-text';
+            content.textContent = text;
+            block.appendChild(content);
+
+            // Copy button
+            const cpBtn = document.createElement('button');
+            cpBtn.className = 'copy-btn';
+            cpBtn.type = 'button';
+            cpBtn.innerHTML = '&#128203;';
+            cpBtn.title = 'Copy ' + sec.label;
+            cpBtn.style.opacity = '0.6';
+            cpBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(text).then(() => {
+                cpBtn.classList.add('copied');
+                cpBtn.innerHTML = '&#10003;';
+                setTimeout(() => {
+                  cpBtn.classList.remove('copied');
+                  cpBtn.innerHTML = '&#128203;';
+                }, 1200);
+              });
+            });
+            block.style.position = 'relative';
+            block.appendChild(cpBtn);
+
+            grid.appendChild(block);
+          });
+
+          detailTd.appendChild(grid);
+          detailTr.appendChild(detailTd);
+          productTableBody.appendChild(detailTr);
+
+          // Toggle click
+          const toggleBtn = expandTd.querySelector('.detail-toggle');
+          toggleBtn.addEventListener('click', () => {
+            toggleBtn.classList.toggle('open');
+            detailTr.classList.toggle('open');
+          });
+        }
       });
     }
 
