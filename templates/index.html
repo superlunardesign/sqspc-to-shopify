@@ -317,16 +317,36 @@
       position: relative;
     }
 
-    td.copied::after {
-      content: 'Copied!';
+    .copy-btn {
       position: absolute;
-      top: 2px;
+      top: 4px;
       right: 4px;
+      width: 22px;
+      height: 22px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       font-size: 0.65rem;
-      color: var(--success);
-      font-weight: 600;
-      pointer-events: none;
-      animation: fadeOut 1.2s forwards;
+      opacity: 0;
+      transition: opacity 0.15s, background 0.15s, color 0.15s;
+      z-index: 3;
+      padding: 0;
+      line-height: 1;
+    }
+
+    td.copyable:hover .copy-btn { opacity: 1; }
+    .copy-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+
+    .copy-btn.copied {
+      opacity: 1;
+      background: var(--success);
+      border-color: var(--success);
+      color: white;
     }
 
     @keyframes fadeOut {
@@ -1023,11 +1043,23 @@
 
     function makeCopyable(td, text) {
       td.classList.add('copyable');
-      td.title = 'Click to copy';
-      td.addEventListener('click', (e) => {
-        if (e.target.closest('.img-thumb')) return;
-        copyText(text, td);
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.type = 'button';
+      btn.innerHTML = '&#128203;';
+      btn.title = 'Copy to clipboard';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(text).then(() => {
+          btn.classList.add('copied');
+          btn.innerHTML = '&#10003;';
+          setTimeout(() => {
+            btn.classList.remove('copied');
+            btn.innerHTML = '&#128203;';
+          }, 1200);
+        });
       });
+      td.appendChild(btn);
     }
 
     // =========================================================================

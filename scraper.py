@@ -1025,6 +1025,9 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
     _limiter.cooldown(20)
 
     # --- Per-product scrape (reviews live on product pages) ----------------
+    # Log the first product's API response to diagnose endpoint issues
+    first_api_logged = False
+
     for product in products:
         product_id = product.get("id", "")
         product_title = product.get("title", "")
@@ -1033,33 +1036,74 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
         reviews = []
 
         # Method 1: Squarespace review API endpoints
+        # Use JSON-specific headers for API calls
+        api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
         api_paths = [
             f"/api/commerce/reviews/published?productId={product_id}",
+            f"/api/commerce/reviews?productId={product_id}&status=PUBLISHED",
             f"/api/review/public/reviews?productId={product_id}",
         ]
 
         for api_path in api_paths:
+            api_url = f"{base_url}{api_path}"
             try:
-                resp = session.get(
-                    f"{base_url}{api_path}",
-                    headers=DEFAULT_HEADERS,
-                    timeout=15,
-                )
+                resp = session.get(api_url, headers=api_headers, timeout=15)
+
+                if not first_api_logged:
+                    logger.info(
+                        "Review API probe: %s → %d (%.0f bytes)",
+                        api_path.split("?")[0], resp.status_code,
+                        len(resp.content),
+                    )
+
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After", 0))
+                    _limiter.on_rate_limit(retry_after)
+                    logger.warning("Review API 429 for %s", product_title)
+                    break  # stop trying more endpoints for this product
+
+                if resp.status_code == 404 or resp.status_code == 403:
+                    continue  # try next endpoint
+
                 if resp.status_code == 200:
                     data = resp.json()
-                    review_list = data if isinstance(data, list) else data.get("reviews", [])
+                    # Squarespace may wrap in {"reviews": [...]} or return
+                    # a bare list; also check for {"items": [...]}
+                    review_list = (
+                        data if isinstance(data, list)
+                        else data.get("reviews", data.get("items", []))
+                    )
+                    if not first_api_logged:
+                        logger.info(
+                            "Review API returned %d review(s) for %s",
+                            len(review_list), product_title,
+                        )
                     for r in review_list:
                         reviews.append(_normalise_review(r, product_title, product_handle))
                     if reviews:
                         break
-            except Exception:
+            except Exception as exc:
+                if not first_api_logged:
+                    logger.warning("Review API error for %s: %s", api_path, exc)
                 continue
 
+        first_api_logged = True
+
         # Method 2: Scrape reviews from product page HTML
+        # (fallback – often empty because reviews are JS-rendered)
         if not reviews and product.get("url"):
             html = _get_html(session, product["url"])
             if html:
                 reviews = _scrape_reviews_from_html(html, product_title, product_handle)
+                if not reviews:
+                    # Check if the page even has a review container
+                    has_container = "reviewsContainer" in html or "reviewDetails" in html
+                    if has_container:
+                        logger.info(
+                            "Review HTML container found but empty for %s "
+                            "(reviews may be JS-rendered)",
+                            product_title,
+                        )
 
         _add_reviews(reviews)
         if reviews:
