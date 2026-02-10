@@ -71,9 +71,10 @@ def scrape():
     try:
         # ----- Products ----------------------------------------------------
         products = []
+        scrape_session = None
         if do_products:
             logger.info("Starting product scrape for %s%s", site_url, shop_path)
-            products = scrape_products(site_url, shop_path)
+            products, scrape_session = scrape_products(site_url, shop_path)
             result["product_count"] = len(products)
             result["sold_out_count"] = sum(
                 1 for p in products if p.get("sold_out")
@@ -109,7 +110,7 @@ def scrape():
         # ----- Reviews -----------------------------------------------------
         if do_reviews and products:
             logger.info("Starting review scrape for %d products", len(products))
-            reviews = scrape_reviews(site_url, products)
+            reviews = scrape_reviews(site_url, products, session=scrape_session)
             result["review_count"] = len(reviews)
 
             if reviews:

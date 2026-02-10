@@ -683,7 +683,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                 _limiter.wait()
 
     logger.info("Scraped %d products total.", len(products))
-    return products
+    return products, session
 
 
 def _normalise_price(raw_price: str, currency: str = "") -> str:
@@ -994,23 +994,33 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
         return None
 
 
-def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
+def scrape_reviews(
+    base_url: str,
+    products: list[dict],
+    session: requests.Session | None = None,
+) -> list[dict]:
     """Scrape product reviews from a Squarespace store.
 
-    Strategy: Squarespace shows *store-wide* reviews on every product
-    page.  Instead of fetching all 76+ pages, we fetch ONE product page,
-    extract all reviews, and map each to the right product via its
-    ``productLink`` href.  Only falls back to per-product fetching if the
-    first page yields nothing.
+    Strategies (tried in order):
+    1. Squarespace review API — query the commerce reviews endpoint
+       using the same session (with cookies) from product scraping.
+    2. HTML fallback — parse any server-rendered reviews from a product
+       page.
+
+    Parameters
+    ----------
+    session : optional
+        Re-use the session from ``scrape_products`` so cookies and
+        rate-limit state carry over.
 
     Returns a flat list of review dicts.
     """
     base_url = base_url.rstrip("/")
-    session = requests.Session()
+    if session is None:
+        session = requests.Session()
     all_reviews = []
-    seen_reviews = set()  # deduplicate by (handle, author, body_start)
+    seen_reviews = set()
 
-    # Build a handle→title lookup for cross-product review matching
     handle_titles = {}
     for p in products:
         handle_titles[p.get("handle", "")] = p.get("title", "")
@@ -1026,66 +1036,169 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
     _limiter.cooldown(20)
 
     # ------------------------------------------------------------------
-    # Method 1: Fetch ONE product page and get all store-wide reviews
+    # Method 1: Squarespace Review API
     # ------------------------------------------------------------------
-    # Squarespace displays all store reviews on every product page.
-    # We just need one page with a URL to grab them all.
-    store_reviews_found = False
-    products_with_urls = [p for p in products if p.get("url")]
+    # The JS `ProductReviewsController` fetches reviews via an internal
+    # API.  We try several known endpoint patterns, both store-wide and
+    # per-product.  Logging is verbose so we can diagnose on first deploy.
+    api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
+    api_reviews = []
 
-    for probe_product in products_with_urls[:3]:  # try up to 3 pages
-        probe_url = probe_product["url"]
-        logger.info("Fetching reviews from product page: %s", probe_url)
-        html = _get_html(session, probe_url)
-        if not html:
-            logger.warning("Could not fetch %s for reviews", probe_url)
-            _limiter.wait()
-            continue
-
-        # Check if the page has a reviews container
-        if "reviewsContainer" not in html and "reviewDetails" not in html:
-            logger.info("No review container found on %s", probe_url)
-            _limiter.wait()
-            continue
-
-        reviews = _scrape_reviews_from_html(html, "", "")
-        if reviews:
-            # Enrich reviews: fill in product titles from handle lookup
-            for r in reviews:
-                handle = r.get("product_handle", "")
-                if handle and handle in handle_titles:
-                    r["product_title"] = handle_titles[handle]
-            _add_reviews(reviews)
+    # 1a. Store-wide endpoints (gets ALL reviews at once)
+    store_wide_paths = [
+        "/api/commerce/reviews/published",
+        "/api/commerce/reviews?status=PUBLISHED",
+        "/api/commerce/reviews",
+    ]
+    for api_path in store_wide_paths:
+        api_url = f"{base_url}{api_path}"
+        try:
+            resp = session.get(api_url, headers=api_headers, timeout=15)
             logger.info(
-                "Found %d store-wide reviews from %s",
-                len(reviews), probe_url,
+                "Review API [store-wide] %s → %d (%d bytes)",
+                api_path, resp.status_code, len(resp.content),
             )
-            store_reviews_found = True
-            break
-        else:
-            logger.info("Review container found but parsing yielded 0 on %s", probe_url)
-
+            if resp.status_code == 429:
+                _limiter.on_rate_limit(
+                    float(resp.headers.get("Retry-After", 0))
+                )
+                _limiter.wait()
+                continue
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except ValueError:
+                    logger.warning("Review API returned non-JSON for %s", api_path)
+                    continue
+                review_list = (
+                    data if isinstance(data, list)
+                    else data.get("reviews", data.get("items", []))
+                )
+                logger.info("  → parsed %d review(s)", len(review_list))
+                for r in review_list:
+                    api_reviews.append(_normalise_review(r, "", ""))
+                if api_reviews:
+                    break
+        except Exception as exc:
+            logger.warning("Review API error %s: %s", api_path, exc)
         _limiter.wait()
 
-    # ------------------------------------------------------------------
-    # Method 2 (fallback): Per-product HTML scrape
-    # ------------------------------------------------------------------
-    # Only runs if Method 1 found nothing.
-    if not store_reviews_found:
-        logger.info("Store-wide reviews not found, trying per-product scrape")
-        for product in products:
-            product_title = product.get("title", "")
-            product_handle = product.get("handle", "")
+    # 1b. Per-product endpoint (try first product only as a probe)
+    if not api_reviews and products:
+        probe = products[0]
+        product_id = probe.get("id", "")
+        per_product_paths = [
+            f"/api/commerce/reviews/published?productId={product_id}",
+            f"/api/commerce/reviews?productId={product_id}&status=PUBLISHED",
+            f"/api/commerce/reviews?productId={product_id}",
+        ]
+        for api_path in per_product_paths:
+            api_url = f"{base_url}{api_path}"
+            try:
+                resp = session.get(api_url, headers=api_headers, timeout=15)
+                logger.info(
+                    "Review API [per-product] %s → %d (%d bytes)",
+                    api_path.split("?")[0], resp.status_code,
+                    len(resp.content),
+                )
+                if resp.status_code == 429:
+                    _limiter.on_rate_limit(
+                        float(resp.headers.get("Retry-After", 0))
+                    )
+                    _limiter.wait()
+                    continue
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                    except ValueError:
+                        logger.warning("Review API returned non-JSON for %s", api_path)
+                        continue
+                    review_list = (
+                        data if isinstance(data, list)
+                        else data.get("reviews", data.get("items", []))
+                    )
+                    logger.info("  → parsed %d review(s)", len(review_list))
+                    if review_list:
+                        # This endpoint works — now fetch all products
+                        for r in review_list:
+                            api_reviews.append(
+                                _normalise_review(r, probe["title"], probe["handle"])
+                            )
+                        # Fetch remaining products
+                        for product in products[1:]:
+                            pid = product.get("id", "")
+                            url = f"{base_url}{api_path.split('?')[0]}?productId={pid}"
+                            _limiter.wait()
+                            try:
+                                r2 = session.get(url, headers=api_headers, timeout=15)
+                                if r2.status_code == 200:
+                                    d2 = r2.json()
+                                    rl2 = (
+                                        d2 if isinstance(d2, list)
+                                        else d2.get("reviews", d2.get("items", []))
+                                    )
+                                    for rv in rl2:
+                                        api_reviews.append(
+                                            _normalise_review(
+                                                rv, product["title"], product["handle"]
+                                            )
+                                        )
+                                elif r2.status_code == 429:
+                                    _limiter.on_rate_limit(
+                                        float(r2.headers.get("Retry-After", 0))
+                                    )
+                            except Exception:
+                                pass
+                        break
+            except Exception as exc:
+                logger.warning("Review API error %s: %s", api_path, exc)
+            _limiter.wait()
 
-            if not product.get("url"):
+    if api_reviews:
+        # Enrich with titles from handle lookup
+        for r in api_reviews:
+            handle = r.get("product_handle", "")
+            if handle and handle in handle_titles and not r.get("product_title"):
+                r["product_title"] = handle_titles[handle]
+        _add_reviews(api_reviews)
+        logger.info("Review API returned %d reviews total", len(api_reviews))
+
+    # ------------------------------------------------------------------
+    # Method 2: HTML fallback — parse server-rendered reviews
+    # ------------------------------------------------------------------
+    if not all_reviews:
+        logger.info("Review API found nothing, trying HTML scrape")
+        products_with_urls = [p for p in products if p.get("url")]
+        for probe_product in products_with_urls[:3]:
+            probe_url = probe_product["url"]
+            logger.info("Fetching reviews from product page: %s", probe_url)
+            html = _get_html(session, probe_url)
+            if not html:
+                logger.warning("Could not fetch %s for reviews", probe_url)
+                _limiter.wait()
                 continue
 
-            html = _get_html(session, product["url"])
-            if html:
-                reviews = _scrape_reviews_from_html(html, product_title, product_handle)
+            has_container = "reviewsContainer" in html or "reviewDetails" in html
+            logger.info(
+                "HTML page %s: %d bytes, review container: %s",
+                probe_url, len(html), has_container,
+            )
+
+            if not has_container:
+                _limiter.wait()
+                continue
+
+            reviews = _scrape_reviews_from_html(html, "", "")
+            if reviews:
+                for r in reviews:
+                    handle = r.get("product_handle", "")
+                    if handle and handle in handle_titles:
+                        r["product_title"] = handle_titles[handle]
                 _add_reviews(reviews)
-                if reviews:
-                    logger.info("Found %d reviews for %s", len(reviews), product_title)
+                logger.info("Found %d reviews from HTML on %s", len(reviews), probe_url)
+                break
+            else:
+                logger.info("Review container found but 0 reviews parsed (JS-rendered)")
             _limiter.wait()
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
