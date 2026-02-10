@@ -575,8 +575,17 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
     try:
         raw_title = item.get("title", "")
         title, vendor = _extract_vendor_from_title(raw_title)
-        slug = item.get("urlId", "") or item.get("fullUrl", "").rstrip("/").split("/")[-1]
-        product_url = f"{base_url}/{slug}" if slug else ""
+
+        full_url = item.get("fullUrl", "")
+        slug = item.get("urlId", "") or full_url.rstrip("/").split("/")[-1]
+
+        # fullUrl has the correct path (e.g. /shop-skincare/p/slug)
+        if full_url:
+            product_url = f"{base_url}{full_url}" if full_url.startswith("/") else f"{base_url}/{full_url}"
+        elif slug:
+            product_url = f"{base_url}/{slug}"
+        else:
+            product_url = ""
 
         # ---- Body / description -------------------------------------------
         body_html = item.get("body", "") or ""
