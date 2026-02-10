@@ -31,7 +31,7 @@ DEFAULT_HEADERS = {
 class _RateLimiter:
     """Adaptive rate limiter that backs off on 429 responses."""
 
-    def __init__(self, base_delay: float = 0.8):
+    def __init__(self, base_delay: float = 1.2):
         self.base_delay = base_delay
         self.delay = base_delay
         self.last_429_time = 0.0
@@ -44,7 +44,13 @@ class _RateLimiter:
     def on_success(self):
         """Slowly reduce delay after successful requests."""
         self.consecutive_429s = 0
-        self.delay = max(self.base_delay, self.delay * 0.85)
+        # If we were recently rate-limited, decay very slowly
+        since_429 = time.time() - self.last_429_time
+        if since_429 < 60:
+            # Within 60s of a 429: barely decay (0.97x per success)
+            self.delay = max(self.base_delay, self.delay * 0.97)
+        else:
+            self.delay = max(self.base_delay, self.delay * 0.90)
 
     def on_rate_limit(self, retry_after: float = 0):
         """Increase delay after a 429 response."""
@@ -161,6 +167,8 @@ def _get_html(session: requests.Session, url: str, retries: int = 4) -> str | No
     for attempt in range(retries):
         try:
             resp = session.get(url, headers=DEFAULT_HEADERS, timeout=30)
+            if resp.status_code == 404:
+                return None  # permanent – never retry
             if resp.status_code == 429:
                 retry_after = float(resp.headers.get("Retry-After", 0))
                 _limiter.on_rate_limit(retry_after)
@@ -593,11 +601,13 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
 
         json_worked = True
 
+        new_on_page = 0
         for item in items:
             item_id = item.get("id", "")
             if item_id in seen_ids:
                 continue
             seen_ids.add(item_id)
+            new_on_page += 1
 
             product = _process_product(session, base_url, item)
             if product:
@@ -606,10 +616,17 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
 
             _limiter.wait()
 
+        # Stop if every item on this page was already seen (looping)
+        if new_on_page == 0:
+            logger.info("No new products on page %d, stopping pagination.", page)
+            break
+
         # Check for more pages
         pagination = data.get("pagination", {})
-        if pagination.get("nextPage"):
-            page += 1
+        next_page = pagination.get("nextPage")
+        if next_page:
+            # nextPage can be a page number or boolean
+            page = int(next_page) if isinstance(next_page, (int, float)) else page + 1
         elif len(items) >= 20:
             # Some themes don't return pagination info
             page += 1
@@ -1005,24 +1022,9 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
                 all_reviews.append(r)
 
     # Cool down after product scraping to let rate limits reset
-    _limiter.cooldown(10)
+    _limiter.cooldown(20)
 
-    # --- Method 0: Site-wide reviews page ---------------------------------
-    # Many Squarespace stores have a /reviews page with all reviews in a
-    # reviewsContainer.  Scrape it once instead of per-product.
-    site_reviews_found = False
-    for reviews_path in ["/reviews", "/testimonials", "/customer-reviews"]:
-        reviews_html = _get_html(session, f"{base_url}{reviews_path}")
-        if reviews_html and "reviewsContainer" in reviews_html:
-            site_reviews = _scrape_reviews_from_html(reviews_html, "", "")
-            if site_reviews:
-                _add_reviews(site_reviews)
-                site_reviews_found = True
-                logger.info("Found %d reviews on %s page", len(site_reviews), reviews_path)
-                break
-        _limiter.wait()
-
-    # --- Per-product scrape -----------------------------------------------
+    # --- Per-product scrape (reviews live on product pages) ----------------
     for product in products:
         product_id = product.get("id", "")
         product_title = product.get("title", "")
@@ -1053,9 +1055,8 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
             except Exception:
                 continue
 
-        # Method 2: Scrape reviews from product page HTML (skip if we
-        # already got site-wide reviews to avoid redundant requests)
-        if not reviews and not site_reviews_found and product.get("url"):
+        # Method 2: Scrape reviews from product page HTML
+        if not reviews and product.get("url"):
             html = _get_html(session, product["url"])
             if html:
                 reviews = _scrape_reviews_from_html(html, product_title, product_handle)
