@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Squarespace → Shopify Migrator</title>
+  <title>Squarespace &rarr; Shopify Migrator</title>
   <style>
     :root {
       --bg: #0f1117;
@@ -15,6 +15,7 @@
       --accent-hover: #5a52e0;
       --success: #34d399;
       --error: #f87171;
+      --warning: #fbbf24;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -24,15 +25,12 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
       padding: 2rem;
     }
 
-    .container {
-      width: 100%;
-      max-width: 600px;
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
     }
 
     h1 {
@@ -43,15 +41,16 @@
 
     .subtitle {
       color: var(--muted);
-      margin-bottom: 2rem;
       font-size: 0.95rem;
     }
 
-    .card {
+    .form-card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 2rem;
+      max-width: 600px;
+      margin: 0 auto 2rem;
     }
 
     label {
@@ -110,9 +109,11 @@
       height: 16px;
     }
 
-    button {
-      width: 100%;
-      padding: 0.85rem;
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0.85rem 1.5rem;
       background: var(--accent);
       color: white;
       border: none;
@@ -121,13 +122,13 @@
       font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
+      text-decoration: none;
     }
 
-    button:hover { background: var(--accent-hover); }
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-full { width: 100%; }
+    .btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
 
     #status {
       margin-top: 1.5rem;
@@ -200,49 +201,284 @@
       margin-top: -0.75rem;
       margin-bottom: 1.25rem;
     }
+
+    /* ---- Product table ---- */
+    #productTableWrap {
+      display: none;
+      margin-top: 2rem;
+    }
+
+    .table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .table-header h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .table-scroll {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+
+    table.product-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      min-width: 900px;
+    }
+
+    table.product-table thead {
+      background: var(--surface);
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+
+    table.product-table th {
+      padding: 0.75rem 0.65rem;
+      text-align: left;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      border-bottom: 2px solid var(--border);
+      white-space: nowrap;
+      user-select: none;
+    }
+
+    table.product-table td {
+      padding: 0.6rem 0.65rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+      max-width: 250px;
+      cursor: text;
+    }
+
+    table.product-table tr:hover {
+      background: rgba(108, 99, 255, 0.04);
+    }
+
+    table.product-table td.copyable {
+      position: relative;
+    }
+
+    /* Click-to-copy feedback */
+    td.copied::after {
+      content: 'Copied!';
+      position: absolute;
+      top: 2px;
+      right: 4px;
+      font-size: 0.65rem;
+      color: var(--success);
+      font-weight: 600;
+      pointer-events: none;
+      animation: fadeOut 1.2s forwards;
+    }
+
+    @keyframes fadeOut {
+      0%   { opacity: 1; }
+      70%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    .cell-text {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .cell-text.wrap {
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+
+    /* Images */
+    .img-cell {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .img-thumb {
+      width: 44px;
+      height: 44px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+
+    .img-thumb:hover {
+      transform: scale(1.15);
+      z-index: 10;
+      border-color: var(--accent);
+    }
+
+    .img-more {
+      font-size: 0.7rem;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    /* Tags */
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 1px 6px;
+      background: rgba(108, 99, 255, 0.15);
+      color: var(--accent);
+      border-radius: 4px;
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+
+    /* Status badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .badge-active {
+      background: rgba(52, 211, 153, 0.15);
+      color: var(--success);
+    }
+
+    .badge-sold-out {
+      background: rgba(251, 191, 36, 0.15);
+      color: var(--warning);
+    }
+
+    /* Image modal */
+    .img-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .img-modal.open {
+      display: flex;
+    }
+
+    .img-modal img {
+      max-width: 90vw;
+      max-height: 90vh;
+      border-radius: 8px;
+    }
+
+    .img-modal .modal-actions {
+      position: absolute;
+      bottom: 2rem;
+      display: flex;
+      gap: 0.75rem;
+    }
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="header">
     <h1>Squarespace &rarr; Shopify</h1>
     <p class="subtitle">Scrape products &amp; reviews, export Shopify-ready CSVs</p>
+  </div>
 
-    <div class="card">
-      <form id="scrapeForm">
-        <label for="siteUrl">Squarespace Site URL</label>
-        <input
-          type="text"
-          id="siteUrl"
-          name="site_url"
-          placeholder="https://www.example.com"
-          required
-        >
+  <div class="form-card">
+    <form id="scrapeForm">
+      <label for="siteUrl">Squarespace Site URL</label>
+      <input
+        type="text"
+        id="siteUrl"
+        name="site_url"
+        placeholder="https://www.example.com"
+        required
+      >
 
-        <label for="shopPath">Shop Page Path</label>
-        <input
-          type="text"
-          id="shopPath"
-          name="shop_path"
-          placeholder="/shop"
-          value="/shop"
-        >
-        <p class="help">The collection page path (e.g. /shop, /products, /store)</p>
+      <label for="shopPath">Shop Page Path</label>
+      <input
+        type="text"
+        id="shopPath"
+        name="shop_path"
+        placeholder="/shop"
+        value="/shop"
+      >
+      <p class="help">The collection page path (e.g. /shop, /products, /store)</p>
 
-        <div class="checkbox-group">
-          <label>
-            <input type="checkbox" name="scrape_reviews" checked>
-            Scrape reviews
-          </label>
-          <label>
-            <input type="checkbox" name="scrape_products" checked>
-            Scrape products
-          </label>
-        </div>
+      <div class="checkbox-group">
+        <label>
+          <input type="checkbox" name="scrape_reviews" checked>
+          Scrape reviews
+        </label>
+        <label>
+          <input type="checkbox" name="scrape_products" checked>
+          Scrape products
+        </label>
+      </div>
 
-        <button type="submit" id="submitBtn">Start Scraping</button>
-      </form>
+      <button type="submit" id="submitBtn" class="btn btn-full">Start Scraping</button>
+    </form>
 
-      <div id="status"></div>
+    <div id="status"></div>
+  </div>
+
+  <!-- Product table (shown after scrape) -->
+  <div id="productTableWrap">
+    <div class="table-header">
+      <h2 id="tableTitle">Products</h2>
+      <div class="download-links" id="tableDownloads"></div>
+    </div>
+    <div class="table-scroll">
+      <table class="product-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Image</th>
+            <th>Title</th>
+            <th>Handle</th>
+            <th>Vendor</th>
+            <th>Price</th>
+            <th>SKU</th>
+            <th>Type</th>
+            <th>Tags</th>
+            <th>Variants</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="productTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Full-size image modal -->
+  <div class="img-modal" id="imgModal">
+    <img id="imgModalSrc" src="" alt="Full size product image">
+    <div class="modal-actions">
+      <a id="imgModalOpen" class="btn btn-sm" href="" target="_blank" rel="noopener">Open Full Size</a>
+      <button class="btn btn-sm" id="imgModalCopy">Copy Image URL</button>
     </div>
   </div>
 
@@ -250,7 +486,188 @@
     const form = document.getElementById('scrapeForm');
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
+    const productTableWrap = document.getElementById('productTableWrap');
+    const productTableBody = document.getElementById('productTableBody');
+    const tableDownloads = document.getElementById('tableDownloads');
+    const tableTitle = document.getElementById('tableTitle');
+    const imgModal = document.getElementById('imgModal');
+    const imgModalSrc = document.getElementById('imgModalSrc');
+    const imgModalOpen = document.getElementById('imgModalOpen');
+    const imgModalCopy = document.getElementById('imgModalCopy');
 
+    // --- Copy to clipboard helper ---
+    function copyText(text, el) {
+      navigator.clipboard.writeText(text).then(() => {
+        if (el) {
+          el.classList.remove('copied');
+          void el.offsetWidth; // reflow
+          el.classList.add('copied');
+          setTimeout(() => el.classList.remove('copied'), 1300);
+        }
+      });
+    }
+
+    // --- Click-to-copy on table cells ---
+    function makeCopyable(td, text) {
+      td.classList.add('copyable');
+      td.title = 'Click to copy';
+      td.addEventListener('click', (e) => {
+        if (e.target.closest('.img-thumb')) return; // don't interfere with image clicks
+        copyText(text, td);
+      });
+    }
+
+    // --- Image modal ---
+    function openImgModal(url) {
+      imgModalSrc.src = url;
+      imgModalOpen.href = url;
+      imgModal.classList.add('open');
+    }
+
+    imgModal.addEventListener('click', (e) => {
+      if (e.target === imgModal) imgModal.classList.remove('open');
+    });
+
+    imgModalCopy.addEventListener('click', (e) => {
+      e.stopPropagation();
+      copyText(imgModalSrc.src, imgModalCopy);
+      imgModalCopy.textContent = 'Copied!';
+      setTimeout(() => { imgModalCopy.textContent = 'Copy Image URL'; }, 1500);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') imgModal.classList.remove('open');
+    });
+
+    // --- Build product table ---
+    function renderProducts(products) {
+      productTableBody.innerHTML = '';
+      products.forEach((p, i) => {
+        const tr = document.createElement('tr');
+
+        // #
+        const numTd = document.createElement('td');
+        numTd.textContent = i + 1;
+        numTd.style.color = 'var(--muted)';
+        tr.appendChild(numTd);
+
+        // Image
+        const imgTd = document.createElement('td');
+        const imgDiv = document.createElement('div');
+        imgDiv.className = 'img-cell';
+
+        (p.images || []).slice(0, 3).forEach(url => {
+          const img = document.createElement('img');
+          img.className = 'img-thumb';
+          img.src = url + '?format=100w';
+          img.alt = p.title;
+          img.loading = 'lazy';
+          img.addEventListener('click', () => openImgModal(url));
+          imgDiv.appendChild(img);
+        });
+
+        if ((p.images || []).length > 3) {
+          const more = document.createElement('span');
+          more.className = 'img-more';
+          more.textContent = `+${p.images.length - 3}`;
+          imgDiv.appendChild(more);
+        }
+
+        imgTd.appendChild(imgDiv);
+        tr.appendChild(imgTd);
+
+        // Title
+        const titleTd = document.createElement('td');
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'cell-text';
+        titleSpan.textContent = p.title;
+        titleSpan.style.fontWeight = '600';
+        titleTd.appendChild(titleSpan);
+        makeCopyable(titleTd, p.title);
+        tr.appendChild(titleTd);
+
+        // Handle
+        const handleTd = document.createElement('td');
+        handleTd.innerHTML = `<span class="cell-text">${esc(p.handle)}</span>`;
+        makeCopyable(handleTd, p.handle);
+        tr.appendChild(handleTd);
+
+        // Vendor
+        const vendorTd = document.createElement('td');
+        vendorTd.innerHTML = `<span class="cell-text">${esc(p.vendor || '\u2014')}</span>`;
+        if (p.vendor) makeCopyable(vendorTd, p.vendor);
+        tr.appendChild(vendorTd);
+
+        // Price
+        const priceTd = document.createElement('td');
+        let priceHtml = p.price ? `$${p.price}` : '\u2014';
+        if (p.compare_at_price) {
+          priceHtml = `<span style="text-decoration:line-through;color:var(--muted);">$${esc(p.compare_at_price)}</span> $${esc(p.price)}`;
+        }
+        priceTd.innerHTML = priceHtml;
+        priceTd.style.whiteSpace = 'nowrap';
+        if (p.price) makeCopyable(priceTd, p.price);
+        tr.appendChild(priceTd);
+
+        // SKU
+        const skuTd = document.createElement('td');
+        skuTd.innerHTML = `<span class="cell-text">${esc(p.sku || '\u2014')}</span>`;
+        if (p.sku) makeCopyable(skuTd, p.sku);
+        tr.appendChild(skuTd);
+
+        // Type
+        const typeTd = document.createElement('td');
+        typeTd.innerHTML = `<span class="cell-text">${esc(p.product_type || '\u2014')}</span>`;
+        if (p.product_type) makeCopyable(typeTd, p.product_type);
+        tr.appendChild(typeTd);
+
+        // Tags
+        const tagsTd = document.createElement('td');
+        const tagDiv = document.createElement('div');
+        tagDiv.className = 'tag-list';
+        (p.tags || []).slice(0, 5).forEach(t => {
+          const span = document.createElement('span');
+          span.className = 'tag';
+          span.textContent = t;
+          tagDiv.appendChild(span);
+        });
+        if ((p.tags || []).length > 5) {
+          const more = document.createElement('span');
+          more.className = 'tag';
+          more.style.opacity = '0.6';
+          more.textContent = `+${p.tags.length - 5}`;
+          tagDiv.appendChild(more);
+        }
+        tagsTd.appendChild(tagDiv);
+        makeCopyable(tagsTd, (p.tags || []).join(', '));
+        tr.appendChild(tagsTd);
+
+        // Variants
+        const varTd = document.createElement('td');
+        varTd.textContent = p.variant_count || 1;
+        varTd.style.textAlign = 'center';
+        tr.appendChild(varTd);
+
+        // Status
+        const statusTd = document.createElement('td');
+        if (p.sold_out) {
+          statusTd.innerHTML = '<span class="badge badge-sold-out">Sold Out</span>';
+        } else {
+          statusTd.innerHTML = '<span class="badge badge-active">Active</span>';
+        }
+        tr.appendChild(statusTd);
+
+        productTableBody.appendChild(tr);
+      });
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    // --- Form submit ---
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -265,6 +682,7 @@
       submitBtn.innerHTML = '<span class="spinner"></span> Scraping&hellip;';
       status.className = 'info';
       status.innerHTML = 'Connecting to Squarespace site and scraping products&hellip; This may take a few minutes for large stores.';
+      productTableWrap.style.display = 'none';
 
       try {
         const resp = await fetch('/scrape', {
@@ -303,6 +721,20 @@
         html += '</div>';
         status.className = 'success';
         status.innerHTML = html;
+
+        // Render product table
+        if (data.products && data.products.length > 0) {
+          tableTitle.textContent = `Products (${data.products.length})`;
+          tableDownloads.innerHTML = '';
+          if (data.products_csv) {
+            tableDownloads.innerHTML += `<a href="/download/${data.products_csv}">&#11015; Products CSV</a>`;
+          }
+          if (data.reviews_csv) {
+            tableDownloads.innerHTML += `<a href="/download/${data.reviews_csv}">&#11015; Reviews CSV</a>`;
+          }
+          renderProducts(data.products);
+          productTableWrap.style.display = 'block';
+        }
       } catch (err) {
         status.className = 'error';
         status.innerHTML = `Error: ${err.message}`;

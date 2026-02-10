@@ -86,6 +86,25 @@ def scrape():
                 result["products_csv"] = fname
                 logger.info("Wrote %s (%d products)", fpath, len(products))
 
+                # Include product summaries for the table UI
+                result["products"] = [
+                    {
+                        "title": p.get("title", ""),
+                        "handle": p.get("handle", ""),
+                        "vendor": p.get("vendor", ""),
+                        "price": (p.get("variants") or [{}])[0].get("price", ""),
+                        "compare_at_price": (p.get("variants") or [{}])[0].get("compare_at_price", ""),
+                        "sku": (p.get("variants") or [{}])[0].get("sku", ""),
+                        "images": p.get("images", [])[:5],
+                        "tags": p.get("tags", []),
+                        "product_type": p.get("product_type", ""),
+                        "sold_out": p.get("sold_out", False),
+                        "variant_count": len(p.get("variants", [])),
+                        "description": (p.get("description", "") or "")[:200],
+                    }
+                    for p in products
+                ]
+
         # ----- Reviews -----------------------------------------------------
         if do_reviews and products:
             logger.info("Starting review scrape for %d products", len(products))
