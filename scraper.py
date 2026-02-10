@@ -27,6 +27,48 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/json",
 }
 
+
+class _RateLimiter:
+    """Adaptive rate limiter that backs off on 429 responses."""
+
+    def __init__(self, base_delay: float = 0.8):
+        self.base_delay = base_delay
+        self.delay = base_delay
+        self.last_429_time = 0.0
+        self.consecutive_429s = 0
+
+    def wait(self):
+        """Wait the current delay."""
+        time.sleep(self.delay)
+
+    def on_success(self):
+        """Slowly reduce delay after successful requests."""
+        self.consecutive_429s = 0
+        self.delay = max(self.base_delay, self.delay * 0.85)
+
+    def on_rate_limit(self, retry_after: float = 0):
+        """Increase delay after a 429 response."""
+        self.consecutive_429s += 1
+        self.last_429_time = time.time()
+        if retry_after > 0:
+            self.delay = max(self.delay, retry_after)
+        else:
+            # Exponential backoff: double the delay, cap at 30s
+            self.delay = min(30, self.delay * 2)
+        logger.info("Rate limited – backing off to %.1fs delay", self.delay)
+
+    def cooldown(self, seconds: float = 0):
+        """Pause after a burst of requests, e.g. between scrape phases."""
+        pause = seconds or max(5, self.delay * 3)
+        if self.consecutive_429s > 0:
+            pause = max(pause, 15)
+        logger.info("Cooling down for %.0fs before next phase", pause)
+        time.sleep(pause)
+
+
+# Module-level rate limiter shared across functions within a scrape run
+_limiter = _RateLimiter()
+
 # Common heading patterns for structured product sections
 SECTION_PATTERNS = {
     "ingredients": re.compile(
@@ -86,7 +128,7 @@ def clean_image_url(url: str) -> str:
     return cleaned.geturl().rstrip("?")
 
 
-def _get_json(session: requests.Session, url: str, retries: int = 3) -> dict | None:
+def _get_json(session: requests.Session, url: str, retries: int = 4) -> dict | None:
     """Fetch a URL with ``?format=json`` and return the parsed JSON."""
     separator = "&" if "?" in url else "?"
     json_url = f"{url}{separator}format=json"
@@ -96,7 +138,16 @@ def _get_json(session: requests.Session, url: str, retries: int = 3) -> dict | N
             resp = session.get(json_url, headers=DEFAULT_HEADERS, timeout=30)
             if resp.status_code == 404:
                 return None
+            if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 0))
+                _limiter.on_rate_limit(retry_after)
+                logger.warning("Attempt %d for %s: 429 Too Many Requests", attempt + 1, json_url)
+                if attempt < retries - 1:
+                    wait = retry_after if retry_after > 0 else min(30, 3 * (2 ** attempt))
+                    time.sleep(wait)
+                continue
             resp.raise_for_status()
+            _limiter.on_success()
             return resp.json()
         except (requests.RequestException, ValueError) as exc:
             logger.warning("Attempt %d for %s failed: %s", attempt + 1, json_url, exc)
@@ -105,12 +156,21 @@ def _get_json(session: requests.Session, url: str, retries: int = 3) -> dict | N
     return None
 
 
-def _get_html(session: requests.Session, url: str, retries: int = 3) -> str | None:
+def _get_html(session: requests.Session, url: str, retries: int = 4) -> str | None:
     """Fetch a URL and return raw HTML."""
     for attempt in range(retries):
         try:
             resp = session.get(url, headers=DEFAULT_HEADERS, timeout=30)
+            if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 0))
+                _limiter.on_rate_limit(retry_after)
+                logger.warning("Attempt %d for %s: 429 Too Many Requests", attempt + 1, url)
+                if attempt < retries - 1:
+                    wait = retry_after if retry_after > 0 else min(30, 3 * (2 ** attempt))
+                    time.sleep(wait)
+                continue
             resp.raise_for_status()
+            _limiter.on_success()
             return resp.text
         except requests.RequestException as exc:
             logger.warning("Attempt %d for %s failed: %s", attempt + 1, url, exc)
@@ -502,6 +562,10 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
     base_url = base_url.rstrip("/")
     session = requests.Session()
 
+    # Reset the rate limiter for each scrape run
+    global _limiter
+    _limiter = _RateLimiter()
+
     products = []
     page = 1
     seen_ids = set()
@@ -540,8 +604,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                 products.append(product)
                 logger.info("Scraped product: %s", product["title"])
 
-            # Be polite
-            time.sleep(0.5)
+            _limiter.wait()
 
         # Check for more pages
         pagination = data.get("pagination", {})
@@ -566,7 +629,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                     p = _enrich_product_from_html(session, p)
                     products.append(p)
                     logger.info("Scraped product (HTML): %s", p["title"])
-                    time.sleep(0.5)
+                    _limiter.wait()
 
             # Only crawl sub-categories when using HTML fallback, since
             # the JSON API's "All" collection already returns every product.
@@ -587,7 +650,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                         if product:
                             products.append(product)
                             logger.info("Scraped product (category %s): %s", cat_path, product["title"])
-                        time.sleep(0.5)
+                        _limiter.wait()
                 else:
                     cat_html = _get_html(session, cat_url)
                     if cat_html:
@@ -598,9 +661,9 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                                 p = _enrich_product_from_html(session, p)
                                 products.append(p)
                                 logger.info("Scraped product (HTML cat %s): %s", cat_path, p["title"])
-                                time.sleep(0.5)
+                                _limiter.wait()
 
-                time.sleep(0.3)
+                _limiter.wait()
 
     logger.info("Scraped %d products total.", len(products))
     return products
@@ -941,6 +1004,9 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
                 seen_reviews.add(key)
                 all_reviews.append(r)
 
+    # Cool down after product scraping to let rate limits reset
+    _limiter.cooldown(10)
+
     # --- Method 0: Site-wide reviews page ---------------------------------
     # Many Squarespace stores have a /reviews page with all reviews in a
     # reviewsContainer.  Scrape it once instead of per-product.
@@ -954,7 +1020,7 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
                 site_reviews_found = True
                 logger.info("Found %d reviews on %s page", len(site_reviews), reviews_path)
                 break
-        time.sleep(0.3)
+        _limiter.wait()
 
     # --- Per-product scrape -----------------------------------------------
     for product in products:
@@ -997,7 +1063,7 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
         _add_reviews(reviews)
         if reviews:
             logger.info("Found %d reviews for %s", len(reviews), product_title)
-        time.sleep(0.3)
+        _limiter.wait()
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
     return all_reviews
