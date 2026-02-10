@@ -77,8 +77,8 @@ def _build_body_html(product: dict) -> str:
     """Compose the Shopify Body (HTML) field.
 
     Starts with the original product body, then appends structured
-    sections (ingredients, how to use, benefits) as formatted HTML
-    blocks if they exist.
+    sections (ingredients, how to use, benefits, what it is, who it's
+    for) as formatted HTML blocks if they exist.
     """
     parts = []
 
@@ -87,9 +87,11 @@ def _build_body_html(product: dict) -> str:
         parts.append(body)
 
     for label, key in [
-        ("Ingredients", "ingredients"),
-        ("How to Use", "how_to_use"),
+        ("What It Is", "what_it_is"),
         ("Benefits", "benefits"),
+        ("Who It's For", "who_its_for"),
+        ("How to Use", "how_to_use"),
+        ("Ingredients", "ingredients"),
     ]:
         value = product.get(key, "").strip()
         if value:
@@ -133,16 +135,21 @@ def export_products_csv(products: list[dict], dest: IO[str] | None = None) -> st
         if variants and variants[0].get("option_values"):
             option_names = [ov[0] for ov in variants[0]["option_values"]]
 
+        vendor = product.get("vendor", "")
+        product_type = product.get("product_type", "")
+        sold_out = product.get("sold_out", False)
+        status = "draft" if sold_out else "active"
+
         for v_idx, variant in enumerate(variants):
             row = {
                 "Handle": handle,
                 "Title": title if v_idx == 0 else "",
                 "Body (HTML)": body_html if v_idx == 0 else "",
-                "Vendor": product.get("vendor", ""),
+                "Vendor": vendor if v_idx == 0 else "",
                 "Product Category": "",
-                "Type": product.get("product_type", ""),
+                "Type": product_type if v_idx == 0 else "",
                 "Tags": tags if v_idx == 0 else "",
-                "Published": "TRUE",
+                "Published": "FALSE" if sold_out else "TRUE",
                 "Variant SKU": variant.get("sku", ""),
                 "Variant Grams": "",
                 "Variant Inventory Tracker": "shopify",
@@ -165,7 +172,7 @@ def export_products_csv(products: list[dict], dest: IO[str] | None = None) -> st
                 .replace("grams", "g"),
                 "Variant Tax Code": "",
                 "Cost per item": "",
-                "Status": "active",
+                "Status": status,
             }
 
             # Options

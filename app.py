@@ -65,7 +65,7 @@ def scrape():
         shop_path = f"/{shop_path}"
 
     run_id = uuid.uuid4().hex[:12]
-    result = {"product_count": 0, "review_count": 0}
+    result = {"product_count": 0, "review_count": 0, "sold_out_count": 0}
 
     try:
         # ----- Products ----------------------------------------------------
@@ -74,6 +74,9 @@ def scrape():
             logger.info("Starting product scrape for %s%s", site_url, shop_path)
             products = scrape_products(site_url, shop_path)
             result["product_count"] = len(products)
+            result["sold_out_count"] = sum(
+                1 for p in products if p.get("sold_out")
+            )
 
             if products:
                 fname = f"products_{run_id}.csv"

@@ -288,6 +288,9 @@
         if (data.review_count !== undefined) {
           html += ` and <strong>${data.review_count}</strong> reviews`;
         }
+        if (data.sold_out_count) {
+          html += ` (<strong>${data.sold_out_count}</strong> sold out / draft)`;
+        }
         html += '.<div class="download-links">';
 
         if (data.products_csv) {
