@@ -7,6 +7,7 @@ Squarespace storefront using its public JSON API with
 HTML fallback for listing and detail pages.
 """
 
+import json
 import re
 import time
 import logging
@@ -231,6 +232,66 @@ def _extract_additional_info(product_data: dict) -> dict:
                         break
 
     return sections
+
+
+def _extract_jsonld(html: str) -> dict:
+    """Extract Product JSON-LD data from a product page.
+
+    Returns a dict with normalised keys:
+        price, currency, sku, availability, name, brand, description, image
+    All values are strings; missing keys are omitted.
+    """
+    result = {}
+    if not html:
+        return result
+
+    soup = BeautifulSoup(html, "html.parser")
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # Accept both {"@type":"Product"} and lists containing one
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("@type") == "Product":
+                    data = item
+                    break
+            else:
+                continue
+
+        if not isinstance(data, dict) or data.get("@type") != "Product":
+            continue
+
+        if data.get("name"):
+            result["name"] = data["name"]
+        if data.get("brand"):
+            b = data["brand"]
+            result["brand"] = b.get("name", b) if isinstance(b, dict) else str(b)
+        if data.get("description"):
+            result["description"] = data["description"]
+        if data.get("image"):
+            img = data["image"]
+            result["image"] = img if isinstance(img, str) else (img[0] if isinstance(img, list) else "")
+
+        offers = data.get("offers", {})
+        if isinstance(offers, list):
+            offers = offers[0] if offers else {}
+        if isinstance(offers, dict):
+            if offers.get("price") is not None:
+                result["price"] = str(offers["price"])
+            if offers.get("priceCurrency"):
+                result["currency"] = offers["priceCurrency"]
+            if offers.get("sku"):
+                result["sku"] = offers["sku"]
+            if offers.get("availability"):
+                avail = offers["availability"]
+                result["in_stock"] = "InStock" in avail
+
+        break  # only need the first Product
+
+    return result
 
 
 def _scrape_category_paths_from_html(html: str) -> list[str]:
@@ -546,26 +607,43 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
 
 
 def _normalise_price(raw_price: str, currency: str = "") -> str:
-    """Convert a raw price string to dollars.
+    """Convert a raw price string to a dollar-formatted string.
 
-    Squarespace sometimes stores prices in cents (integer).  We detect
-    this by checking if the ``priceMoney`` ``currency`` field is present
-    and the value looks like an integer in cents.  When there's no
-    currency context, we use a high-threshold heuristic (>= 1000)
-    so that realistic dollar amounts like $150 are not divided.
+    Squarespace stores prices inconsistently: some sites use cents
+    (integer like 2600 for $26), others use dollars (26 or 26.0).
+    We use heuristics to detect which format is in play:
+      - If the value has a decimal with fractional cents (e.g. 26.00),
+        it's already dollars.
+      - If currency context is present AND the value is a large integer
+        (>= 100), it's likely cents.
+      - Small integers with currency context are ambiguous; we treat
+        values < 100 as dollars to avoid turning $26 into $0.26.
     """
     if not raw_price:
         return raw_price
     try:
         price_val = float(raw_price)
-        # If there's currency context, Squarespace stores cents
-        if currency:
-            # Always treat as cents when coming from priceMoney
+        if price_val == 0:
+            return "0.00"
+
+        # If it already looks like a dollar amount (has decimal places
+        # in the original string like "26.00" or "65.50"), keep as-is.
+        if "." in raw_price:
+            return f"{price_val:.2f}"
+
+        # Integer value with currency context: decide cents vs dollars.
+        # Squarespace cents are always whole numbers >= 100 (i.e. $1.00+).
+        # Values < 100 with no decimal are ambiguous but more likely dollars
+        # for real product prices.
+        if currency and price_val >= 100 and price_val == int(price_val):
             return f"{price_val / 100:.2f}"
-        # Heuristic fallback: only convert if absurdly high
-        if price_val >= 1000 and price_val == int(price_val):
+
+        # No currency context: only convert very large round numbers
+        if not currency and price_val >= 1000 and price_val == int(price_val):
             return f"{price_val / 100:.2f}"
-        return raw_price
+
+        # Otherwise treat as dollars
+        return f"{price_val:.2f}" if price_val != int(price_val) else raw_price
     except (ValueError, TypeError):
         return raw_price
 
@@ -748,10 +826,39 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
                     if not sections[key] and detail_json_sections.get(key):
                         sections[key] = detail_json_sections[key]
 
-            # HTML fallback for product detail page
-            else:
-                html = _get_html(session, product_url)
-                if html:
+            # Always fetch the HTML page to extract JSON-LD (reliable
+            # price/SKU/availability) and to enrich body/images when
+            # the JSON API returned limited data.
+            html = _get_html(session, product_url)
+            if html:
+                # --- JSON-LD: authoritative price, SKU, availability ---
+                ld = _extract_jsonld(html)
+                if ld.get("price"):
+                    # JSON-LD price is always in dollars – override the
+                    # potentially-wrong cents-vs-dollars value from the API.
+                    ld_price = ld["price"]
+                    for v in variants:
+                        # Only override if the current price looks wrong
+                        # (e.g. $0.26 when JSON-LD says $26.00)
+                        try:
+                            api_price = float(v.get("price") or 0)
+                            jsonld_price = float(ld_price)
+                            # If they differ by ~100x, the API value was in cents
+                            if api_price > 0 and jsonld_price > 0:
+                                ratio = jsonld_price / api_price
+                                if ratio > 50 or ratio < 0.02:
+                                    v["price"] = f"{jsonld_price:.2f}"
+                            elif api_price == 0 and jsonld_price > 0:
+                                v["price"] = f"{jsonld_price:.2f}"
+                        except (ValueError, TypeError, ZeroDivisionError):
+                            pass
+                if ld.get("sku") and variants and not variants[0].get("sku"):
+                    variants[0]["sku"] = ld["sku"]
+                if ld.get("in_stock") is False:
+                    sold_out = True
+
+                # --- Enrich body/images from HTML if JSON was sparse ---
+                if not detail_data:
                     stub = {
                         "url": product_url,
                         "body_html": body_html,
@@ -810,15 +917,46 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
 def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
     """Scrape product reviews for each product.
 
-    Tries multiple known Squarespace review API patterns and
-    falls back to HTML scraping.
+    Tries multiple strategies:
+    1. Squarespace review API endpoints (per product)
+    2. Site-wide reviews page (scrapes all reviews at once)
+    3. Individual product page HTML fallback
 
     Returns a flat list of review dicts.
     """
     base_url = base_url.rstrip("/")
     session = requests.Session()
     all_reviews = []
+    seen_reviews = set()  # deduplicate by (handle, author, body_start)
 
+    # Build a handle→title lookup for cross-product review matching
+    handle_titles = {}
+    for p in products:
+        handle_titles[p.get("handle", "")] = p.get("title", "")
+
+    def _add_reviews(reviews):
+        for r in reviews:
+            key = (r.get("product_handle", ""), r.get("author", ""), r.get("body", "")[:50])
+            if key not in seen_reviews:
+                seen_reviews.add(key)
+                all_reviews.append(r)
+
+    # --- Method 0: Site-wide reviews page ---------------------------------
+    # Many Squarespace stores have a /reviews page with all reviews in a
+    # reviewsContainer.  Scrape it once instead of per-product.
+    site_reviews_found = False
+    for reviews_path in ["/reviews", "/testimonials", "/customer-reviews"]:
+        reviews_html = _get_html(session, f"{base_url}{reviews_path}")
+        if reviews_html and "reviewsContainer" in reviews_html:
+            site_reviews = _scrape_reviews_from_html(reviews_html, "", "")
+            if site_reviews:
+                _add_reviews(site_reviews)
+                site_reviews_found = True
+                logger.info("Found %d reviews on %s page", len(site_reviews), reviews_path)
+                break
+        time.sleep(0.3)
+
+    # --- Per-product scrape -----------------------------------------------
     for product in products:
         product_id = product.get("id", "")
         product_title = product.get("title", "")
@@ -826,7 +964,7 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
 
         reviews = []
 
-        # --- Method 1: Squarespace review API endpoints --------------------
+        # Method 1: Squarespace review API endpoints
         api_paths = [
             f"/api/commerce/reviews/published?productId={product_id}",
             f"/api/review/public/reviews?productId={product_id}",
@@ -849,14 +987,16 @@ def scrape_reviews(base_url: str, products: list[dict]) -> list[dict]:
             except Exception:
                 continue
 
-        # --- Method 2: Scrape reviews from product page HTML ---------------
-        if not reviews and product.get("url"):
+        # Method 2: Scrape reviews from product page HTML (skip if we
+        # already got site-wide reviews to avoid redundant requests)
+        if not reviews and not site_reviews_found and product.get("url"):
             html = _get_html(session, product["url"])
             if html:
                 reviews = _scrape_reviews_from_html(html, product_title, product_handle)
 
-        all_reviews.extend(reviews)
-        logger.info("Found %d reviews for %s", len(reviews), product_title)
+        _add_reviews(reviews)
+        if reviews:
+            logger.info("Found %d reviews for %s", len(reviews), product_title)
         time.sleep(0.3)
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
@@ -883,60 +1023,133 @@ def _normalise_review(review_data: dict, product_title: str, product_handle: str
 
 
 def _scrape_reviews_from_html(html: str, product_title: str, product_handle: str) -> list[dict]:
-    """Fallback: extract reviews from the rendered product page HTML."""
+    """Extract reviews from rendered product/review page HTML.
+
+    Supports two strategies:
+    1. Squarespace native reviews (data-testid attributes like reviewName,
+       reviewStars, reviewDesc, review-date, review-product-name)
+    2. Generic fallback for third-party review widgets
+    """
     reviews = []
     soup = BeautifulSoup(html, "html.parser")
 
-    # Look for common review container patterns
+    # ---- Strategy 1: Squarespace native reviews (data-testid) ----
+    review_blocks = soup.select("div.reviewDetails")
+    if review_blocks:
+        for block in review_blocks:
+            # Author
+            author_el = block.select_one('[data-testid="reviewer-name"]')
+            author = author_el.get_text(strip=True) if author_el else ""
+
+            # Date
+            date_el = block.select_one('[data-testid="review-date"]')
+            date = date_el.get_text(strip=True) if date_el else ""
+
+            # Rating – from sr-only label like "5.00 out of 5 stars"
+            rating = ""
+            stars_el = block.select_one('[data-testid="review-stars"]')
+            if stars_el:
+                sr_label = stars_el.select_one("label.sr-only")
+                if sr_label:
+                    match = re.search(r"([\d.]+)\s+out\s+of", sr_label.get_text())
+                    if match:
+                        rating = match.group(1)
+                # Fallback: count SVG star elements
+                if not rating:
+                    star_svgs = stars_el.find_all("svg", class_="star")
+                    if star_svgs:
+                        rating = str(len(star_svgs))
+
+            # Body / description
+            desc_el = block.select_one('[data-testid="review-desc"]')
+            body = desc_el.get_text(strip=True) if desc_el else ""
+
+            # Product link – reviews may be cross-product
+            review_handle = product_handle
+            review_title = product_title
+            product_link = block.select_one("a.productLink")
+            if product_link:
+                href = product_link.get("href", "")
+                if href:
+                    review_handle = href.rstrip("/").split("/")[-1]
+                link_text = product_link.get_text(strip=True)
+                if link_text:
+                    review_title = link_text
+
+            if body or rating:
+                reviews.append({
+                    "product_title": review_title,
+                    "product_handle": review_handle,
+                    "rating": rating,
+                    "author": author,
+                    "email": "",
+                    "title": "",
+                    "body": body,
+                    "created_at": date,
+                })
+
+        return reviews
+
+    # ---- Strategy 2: Generic fallback ----
     review_containers = soup.find_all(
         class_=re.compile(r"review(?!-rating)|testimonial", re.I)
     )
 
     for container in review_containers:
-        # Skip if it's just a review summary/count element
-        if "count" in (container.get("class", [""])[0] if container.get("class") else ""):
+        # Skip summary/count/stars-only elements
+        classes_str = " ".join(container.get("class", []))
+        if re.search(r"count|summary|overall|header|container|wrapper", classes_str, re.I):
             continue
 
         rating_el = container.find(class_=re.compile(r"rating|stars?", re.I))
         rating = ""
         if rating_el:
-            # Try to find numeric rating
-            rating_text = rating_el.get_text(strip=True)
-            match = re.search(r"(\d(?:\.\d)?)", rating_text)
-            if match:
-                rating = match.group(1)
-            else:
-                # Count star elements
-                stars = rating_el.find_all(
-                    class_=re.compile(r"filled|active|full|solid", re.I)
-                )
-                if stars:
-                    rating = str(len(stars))
+            # Check for sr-only label first
+            sr_label = rating_el.find("label", class_="sr-only")
+            if sr_label:
+                match = re.search(r"([\d.]+)\s+out\s+of", sr_label.get_text())
+                if match:
+                    rating = match.group(1)
+
+            if not rating:
+                rating_text = rating_el.get_text(strip=True)
+                match = re.search(r"(\d(?:\.\d)?)", rating_text)
+                if match:
+                    rating = match.group(1)
+
+            if not rating:
+                # Count SVG stars or filled star elements
+                star_svgs = rating_el.find_all("svg", class_="star")
+                if star_svgs:
+                    rating = str(len(star_svgs))
+                else:
+                    stars = rating_el.find_all(
+                        class_=re.compile(r"filled|active|full|solid", re.I)
+                    )
+                    if stars:
+                        rating = str(len(stars))
 
         author_el = container.find(class_=re.compile(r"author|reviewer|name", re.I))
         author = author_el.get_text(strip=True) if author_el else ""
 
-        title_el = container.find(class_=re.compile(r"title|subject|headline", re.I))
-        title = title_el.get_text(strip=True) if title_el else ""
-
-        body_el = container.find(class_=re.compile(r"body|content|text|comment", re.I))
+        body_el = container.find(
+            class_=re.compile(r"body|content|text|comment|desc", re.I)
+        )
         body = body_el.get_text(strip=True) if body_el else ""
 
         date_el = container.find(class_=re.compile(r"date|time|created", re.I))
         date = date_el.get_text(strip=True) if date_el else ""
 
         if body or rating:
-            reviews.append(
-                {
-                    "product_title": product_title,
-                    "product_handle": product_handle,
-                    "rating": rating,
-                    "author": author,
-                    "email": "",
-                    "title": title,
-                    "body": body,
-                    "created_at": date,
-                }
-            )
+            reviews.append({
+                "product_title": product_title,
+                "product_handle": product_handle,
+                "rating": rating,
+                "author": author,
+                "email": "",
+                "title": "",
+                "body": body,
+                "created_at": date,
+            })
 
     return reviews
