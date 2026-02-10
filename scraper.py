@@ -302,6 +302,34 @@ def _extract_additional_info(product_data: dict) -> dict:
     return sections
 
 
+def _extract_crumb(html: str) -> str:
+    """Extract the Squarespace crumb (CSRF) token from a page.
+
+    The crumb is used by Squarespace's JS controllers to authenticate
+    internal API requests.  It appears in a meta tag or in the page's
+    inline JavaScript context object.
+    """
+    # <meta> tag: <meta name="csrf-token" content="...">
+    meta_match = re.search(
+        r'<meta\s[^>]*name=["\']csrf-token["\'][^>]*content=["\']([^"\']+)',
+        html,
+    )
+    if meta_match:
+        return meta_match.group(1)
+
+    # Squarespace context: "crumb":"..."
+    crumb_match = re.search(r'"crumb"\s*:\s*"([^"]+)"', html)
+    if crumb_match:
+        return crumb_match.group(1)
+
+    # Cookie-based crumb in Set-Cookie or inline script
+    crumb_match2 = re.search(r'crumb=([A-Za-z0-9_-]+)', html)
+    if crumb_match2:
+        return crumb_match2.group(1)
+
+    return ""
+
+
 def _extract_jsonld(html: str) -> dict:
     """Extract Product JSON-LD data from a product page.
 
@@ -937,6 +965,36 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
                 if ld.get("in_stock") is False:
                     sold_out = True
 
+                # --- Always extract sections from ProductItem-additional ---
+                # The JSON body rarely includes the additional content area
+                # (ingredients, how to use, benefits, etc.), so parse it
+                # directly from the HTML page regardless of JSON detail.
+                page_soup = BeautifulSoup(html, "html.parser")
+                additional_el = page_soup.select_one(
+                    "section.ProductItem-additional"
+                )
+                if additional_el:
+                    additional_html = additional_el.decode_contents()
+                    if additional_html.strip():
+                        html_sections = _parse_sections_from_html(
+                            additional_html
+                        )
+                        for key in html_sections:
+                            if html_sections[key] and not sections.get(key):
+                                sections[key] = html_sections[key]
+
+                        # Also merge additional body into body_html
+                        if len(additional_html) > 50:
+                            combined = body_html + "\n" + additional_html
+                            if len(combined) > len(body_html):
+                                body_html = combined
+                                clean_soup = BeautifulSoup(
+                                    combined, "html.parser"
+                                )
+                                description = clean_soup.get_text(
+                                    separator="\n", strip=True
+                                )
+
                 # --- Enrich body/images from HTML if JSON was sparse ---
                 if not detail_data:
                     stub = {
@@ -1047,7 +1105,10 @@ def scrape_reviews(
     # 1a. Store-wide endpoints (gets ALL reviews at once)
     store_wide_paths = [
         "/api/commerce/reviews/published",
+        "/api/commerce/reviews/published?page=0&size=100",
         "/api/commerce/reviews?status=PUBLISHED",
+        "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
+        "/api/commerce/reviews?type=STORE&page=0&size=100",
         "/api/commerce/reviews",
     ]
     for api_path in store_wide_paths:
@@ -1074,7 +1135,12 @@ def scrape_reviews(
                     data if isinstance(data, list)
                     else data.get("reviews", data.get("items", []))
                 )
-                logger.info("  → parsed %d review(s)", len(review_list))
+                if not review_list:
+                    # Log response keys so we can discover the correct field
+                    keys = list(data.keys()) if isinstance(data, dict) else f"list[{len(data)}]"
+                    logger.info("  → 0 reviews; response keys: %s", keys)
+                else:
+                    logger.info("  → parsed %d review(s)", len(review_list))
                 for r in review_list:
                     api_reviews.append(_normalise_review(r, "", ""))
                 if api_reviews:
@@ -1199,6 +1265,73 @@ def scrape_reviews(
                 break
             else:
                 logger.info("Review container found but 0 reviews parsed (JS-rendered)")
+
+                # Method 2b: Try using crumb token from the HTML page
+                # Squarespace's JS controller uses a crumb for auth.
+                crumb = _extract_crumb(html)
+                if crumb:
+                    logger.info("Found crumb token, retrying review API with auth")
+                    crumb_headers = {
+                        **api_headers,
+                        "X-Requested-With": "XMLHttpRequest",
+                    }
+                    crumb_endpoints = [
+                        "/api/commerce/reviews/published?page=0&size=100",
+                        "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
+                        "/api/commerce/reviews?type=STORE&page=0&size=100",
+                    ]
+                    for ep in crumb_endpoints:
+                        sep = "&" if "?" in ep else "?"
+                        crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
+                        try:
+                            resp = session.get(
+                                crumb_url, headers=crumb_headers, timeout=15,
+                            )
+                            logger.info(
+                                "Review API [crumb] %s → %d (%d bytes)",
+                                ep, resp.status_code, len(resp.content),
+                            )
+                            if resp.status_code == 200:
+                                try:
+                                    data = resp.json()
+                                except ValueError:
+                                    continue
+                                review_list = (
+                                    data if isinstance(data, list)
+                                    else data.get("reviews",
+                                         data.get("items", []))
+                                )
+                                if review_list:
+                                    logger.info(
+                                        "  → crumb auth: %d review(s)",
+                                        len(review_list),
+                                    )
+                                    for rv in review_list:
+                                        _add_reviews(
+                                            [_normalise_review(rv, "", "")]
+                                        )
+                                    break
+                                else:
+                                    keys = (
+                                        list(data.keys())
+                                        if isinstance(data, dict)
+                                        else f"list[{len(data)}]"
+                                    )
+                                    logger.info(
+                                        "  → 0 reviews; keys: %s", keys,
+                                    )
+                        except Exception as exc:
+                            logger.warning("Crumb review error: %s", exc)
+                        _limiter.wait()
+
+                    if all_reviews:
+                        # Enrich titles
+                        for r in all_reviews:
+                            handle = r.get("product_handle", "")
+                            if handle and handle in handle_titles:
+                                r["product_title"] = handle_titles[handle]
+                        break
+
             _limiter.wait()
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
