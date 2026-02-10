@@ -16,6 +16,10 @@
       --success: #34d399;
       --error: #f87171;
       --warning: #fbbf24;
+      --shopify-bg: rgba(52, 211, 153, 0.08);
+      --shopify-border: rgba(52, 211, 153, 0.3);
+      --sqspc-bg: rgba(108, 99, 255, 0.08);
+      --sqspc-border: rgba(108, 99, 255, 0.3);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -30,7 +34,7 @@
 
     .header {
       text-align: center;
-      margin-bottom: 2rem;
+      margin-bottom: 1.5rem;
     }
 
     h1 {
@@ -44,6 +48,44 @@
       font-size: 0.95rem;
     }
 
+    /* ---- Tab navigation ---- */
+    .tabs {
+      display: flex;
+      justify-content: center;
+      gap: 0;
+      margin-bottom: 2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-width: 400px;
+      margin-left: auto;
+      margin-right: auto;
+      overflow: hidden;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 0.75rem 1.25rem;
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover { color: var(--text); }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: white;
+    }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ---- Form card ---- */
     .form-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -52,6 +94,8 @@
       max-width: 600px;
       margin: 0 auto 2rem;
     }
+
+    .form-card.wide { max-width: 900px; }
 
     label {
       display: block;
@@ -129,8 +173,10 @@
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-full { width: 100%; }
     .btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
+    .btn-success { background: #059669; }
+    .btn-success:hover { background: #047857; }
 
-    #status {
+    .status-box {
       margin-top: 1.5rem;
       padding: 1rem;
       border-radius: 8px;
@@ -139,19 +185,19 @@
       line-height: 1.6;
     }
 
-    #status.info {
+    .status-box.info {
       display: block;
       background: rgba(108, 99, 255, 0.1);
       border: 1px solid rgba(108, 99, 255, 0.3);
     }
 
-    #status.success {
+    .status-box.success {
       display: block;
       background: rgba(52, 211, 153, 0.1);
       border: 1px solid rgba(52, 211, 153, 0.3);
     }
 
-    #status.error {
+    .status-box.error {
       display: block;
       background: rgba(248, 113, 113, 0.1);
       border: 1px solid rgba(248, 113, 113, 0.3);
@@ -271,7 +317,6 @@
       position: relative;
     }
 
-    /* Click-to-copy feedback */
     td.copied::after {
       content: 'Copied!';
       position: absolute;
@@ -304,7 +349,6 @@
       -webkit-box-orient: vertical;
     }
 
-    /* Images */
     .img-cell {
       display: flex;
       gap: 4px;
@@ -334,7 +378,6 @@
       flex-shrink: 0;
     }
 
-    /* Tags */
     .tag-list {
       display: flex;
       flex-wrap: wrap;
@@ -351,7 +394,6 @@
       white-space: nowrap;
     }
 
-    /* Status badges */
     .badge {
       display: inline-block;
       padding: 2px 8px;
@@ -371,7 +413,6 @@
       color: var(--warning);
     }
 
-    /* Image modal */
     .img-modal {
       display: none;
       position: fixed;
@@ -399,6 +440,400 @@
       display: flex;
       gap: 0.75rem;
     }
+
+    /* ---- Merge UI styles ---- */
+    .file-upload-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .file-upload-box {
+      background: var(--bg);
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 1.5rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    .file-upload-box:hover,
+    .file-upload-box.dragover {
+      border-color: var(--accent);
+      background: rgba(108, 99, 255, 0.05);
+    }
+
+    .file-upload-box.has-file {
+      border-color: var(--success);
+      border-style: solid;
+      background: rgba(52, 211, 153, 0.05);
+    }
+
+    .file-upload-box input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .file-upload-box .upload-icon {
+      font-size: 1.75rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .file-upload-box .upload-label {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .file-upload-box .upload-hint {
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+
+    .file-upload-box .file-name {
+      font-size: 0.8rem;
+      color: var(--success);
+      font-weight: 600;
+      margin-top: 0.5rem;
+      word-break: break-all;
+    }
+
+    /* Summary stats */
+    .merge-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-card .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.2rem;
+    }
+
+    .stat-card .stat-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Column defaults */
+    .col-defaults {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .col-defaults h3 {
+      font-size: 0.9rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+    }
+
+    .col-defaults-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 0.5rem;
+    }
+
+    .col-default-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      background: var(--surface);
+      font-size: 0.8rem;
+    }
+
+    .col-default-item .field-name {
+      font-weight: 600;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Merge strategy selector */
+    .strategy-select {
+      appearance: none;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+      min-width: 110px;
+    }
+
+    .strategy-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    /* Product diff cards */
+    .diff-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .diff-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .diff-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s;
+      gap: 0.75rem;
+    }
+
+    .diff-card-header:hover {
+      background: rgba(108, 99, 255, 0.04);
+    }
+
+    .diff-card-title {
+      font-weight: 600;
+      font-size: 0.9rem;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .diff-card-meta {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-shrink: 0;
+    }
+
+    .diff-count {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .diff-count.has-diffs {
+      background: rgba(251, 191, 36, 0.15);
+      color: var(--warning);
+    }
+
+    .diff-count.no-diffs {
+      background: rgba(52, 211, 153, 0.15);
+      color: var(--success);
+    }
+
+    .diff-arrow {
+      font-size: 0.75rem;
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+
+    .diff-card.open .diff-arrow {
+      transform: rotate(90deg);
+    }
+
+    .diff-card-body {
+      display: none;
+      border-top: 1px solid var(--border);
+    }
+
+    .diff-card.open .diff-card-body {
+      display: block;
+    }
+
+    .diff-field-row {
+      display: grid;
+      grid-template-columns: 120px 1fr 110px 1fr;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--border);
+      align-items: start;
+      font-size: 0.8rem;
+    }
+
+    .diff-field-row:last-child {
+      border-bottom: none;
+    }
+
+    .diff-field-row.unchanged {
+      opacity: 0.4;
+    }
+
+    .diff-field-name {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      padding-top: 0.15rem;
+    }
+
+    .diff-val {
+      padding: 0.3rem 0.5rem;
+      border-radius: 5px;
+      font-size: 0.8rem;
+      max-height: 80px;
+      overflow-y: auto;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .diff-val.shopify-val {
+      background: var(--shopify-bg);
+      border: 1px solid var(--shopify-border);
+    }
+
+    .diff-val.sqspc-val {
+      background: var(--sqspc-bg);
+      border: 1px solid var(--sqspc-border);
+    }
+
+    .diff-val.empty-val {
+      color: var(--muted);
+      font-style: italic;
+      opacity: 0.6;
+    }
+
+    .diff-field-row .strategy-select {
+      align-self: start;
+      margin-top: 0.15rem;
+    }
+
+    /* Source labels */
+    .source-labels {
+      display: grid;
+      grid-template-columns: 120px 1fr 110px 1fr;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+
+    .source-label-sh { color: var(--success); }
+    .source-label-sq { color: var(--accent); }
+
+    /* Unmatched products section */
+    .unmatched-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .unmatched-section h3 {
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .unmatched-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+    }
+
+    .unmatched-handle {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    /* Filter controls */
+    .merge-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .filter-btns {
+      display: flex;
+      gap: 0.3rem;
+    }
+
+    .filter-btn {
+      padding: 0.35rem 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-btn:hover { color: var(--text); border-color: var(--accent); }
+    .filter-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+    /* Quick actions */
+    .quick-actions {
+      display: flex;
+      gap: 0.4rem;
+    }
+
+    .quick-actions .btn {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    @media (max-width: 768px) {
+      .file-upload-row {
+        grid-template-columns: 1fr;
+      }
+      .diff-field-row, .source-labels {
+        grid-template-columns: 1fr;
+        gap: 0.25rem;
+      }
+      .source-labels > :nth-child(2),
+      .source-labels > :nth-child(3) {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -407,69 +842,152 @@
     <p class="subtitle">Scrape products &amp; reviews, export Shopify-ready CSVs</p>
   </div>
 
-  <div class="form-card">
-    <form id="scrapeForm">
-      <label for="siteUrl">Squarespace Site URL</label>
-      <input
-        type="text"
-        id="siteUrl"
-        name="site_url"
-        placeholder="https://www.example.com"
-        required
-      >
-
-      <label for="shopPath">Shop Page Path</label>
-      <input
-        type="text"
-        id="shopPath"
-        name="shop_path"
-        placeholder="/shop"
-        value="/shop"
-      >
-      <p class="help">The collection page path (e.g. /shop, /products, /store)</p>
-
-      <div class="checkbox-group">
-        <label>
-          <input type="checkbox" name="scrape_reviews" checked>
-          Scrape reviews
-        </label>
-        <label>
-          <input type="checkbox" name="scrape_products" checked>
-          Scrape products
-        </label>
-      </div>
-
-      <button type="submit" id="submitBtn" class="btn btn-full">Start Scraping</button>
-    </form>
-
-    <div id="status"></div>
+  <!-- Tab navigation -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="scrape">Scrape</button>
+    <button class="tab-btn" data-tab="merge">Merge CSVs</button>
   </div>
 
-  <!-- Product table (shown after scrape) -->
-  <div id="productTableWrap">
-    <div class="table-header">
-      <h2 id="tableTitle">Products</h2>
-      <div class="download-links" id="tableDownloads"></div>
+  <!-- ============================================================ -->
+  <!-- SCRAPE TAB -->
+  <!-- ============================================================ -->
+  <div class="tab-panel active" id="tab-scrape">
+    <div class="form-card">
+      <form id="scrapeForm">
+        <label for="siteUrl">Squarespace Site URL</label>
+        <input
+          type="text"
+          id="siteUrl"
+          name="site_url"
+          placeholder="https://www.example.com"
+          required
+        >
+
+        <label for="shopPath">Shop Page Path</label>
+        <input
+          type="text"
+          id="shopPath"
+          name="shop_path"
+          placeholder="/shop"
+          value="/shop"
+        >
+        <p class="help">The collection page path (e.g. /shop, /products, /store)</p>
+
+        <div class="checkbox-group">
+          <label>
+            <input type="checkbox" name="scrape_reviews" checked>
+            Scrape reviews
+          </label>
+          <label>
+            <input type="checkbox" name="scrape_products" checked>
+            Scrape products
+          </label>
+        </div>
+
+        <button type="submit" id="submitBtn" class="btn btn-full">Start Scraping</button>
+      </form>
+
+      <div id="status" class="status-box"></div>
     </div>
-    <div class="table-scroll">
-      <table class="product-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Image</th>
-            <th>Title</th>
-            <th>Handle</th>
-            <th>Vendor</th>
-            <th>Price</th>
-            <th>SKU</th>
-            <th>Type</th>
-            <th>Tags</th>
-            <th>Variants</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="productTableBody"></tbody>
-      </table>
+
+    <!-- Product table (shown after scrape) -->
+    <div id="productTableWrap">
+      <div class="table-header">
+        <h2 id="tableTitle">Products</h2>
+        <div class="download-links" id="tableDownloads"></div>
+      </div>
+      <div class="table-scroll">
+        <table class="product-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Image</th>
+              <th>Title</th>
+              <th>Handle</th>
+              <th>Vendor</th>
+              <th>Price</th>
+              <th>SKU</th>
+              <th>Type</th>
+              <th>Tags</th>
+              <th>Variants</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="productTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MERGE TAB -->
+  <!-- ============================================================ -->
+  <div class="tab-panel" id="tab-merge">
+    <div class="form-card wide">
+      <h2 style="font-size:1.15rem;margin-bottom:0.25rem;">Merge Product CSVs</h2>
+      <p style="color:var(--muted);font-size:0.85rem;margin-bottom:1.5rem;">
+        Upload your current Shopify product CSV and a Squarespace-exported CSV to compare and merge them.
+        Choose which fields to keep, override, or fill in per column or per product.
+      </p>
+
+      <div class="file-upload-row">
+        <div class="file-upload-box" id="shopifyUploadBox">
+          <input type="file" id="shopifyCsvInput" accept=".csv">
+          <div class="upload-icon">&#128722;</div>
+          <div class="upload-label">Shopify CSV</div>
+          <div class="upload-hint">Your current Shopify product export</div>
+          <div class="file-name" id="shopifyFileName"></div>
+        </div>
+        <div class="file-upload-box" id="sqspcUploadBox">
+          <input type="file" id="sqspcCsvInput" accept=".csv">
+          <div class="upload-icon">&#9638;</div>
+          <div class="upload-label">Squarespace CSV</div>
+          <div class="upload-hint">Scraped export or Squarespace product CSV</div>
+          <div class="file-name" id="sqspcFileName"></div>
+        </div>
+      </div>
+
+      <button id="compareBtn" class="btn btn-full" disabled>Compare Products</button>
+      <div id="mergeStatus" class="status-box"></div>
+    </div>
+
+    <!-- Comparison results (shown after compare) -->
+    <div id="mergeResultsWrap" style="display:none; max-width:1100px; margin:0 auto;">
+
+      <!-- Summary stats -->
+      <div class="merge-summary" id="mergeSummary"></div>
+
+      <!-- Unmatched sections -->
+      <div id="unmatchedSections"></div>
+
+      <!-- Column defaults -->
+      <div class="col-defaults" id="colDefaults" style="display:none;">
+        <h3>Column Defaults &mdash; set a strategy for all products at once</h3>
+        <div class="col-defaults-grid" id="colDefaultsGrid"></div>
+      </div>
+
+      <!-- Filter & actions -->
+      <div class="merge-controls">
+        <div class="filter-btns">
+          <button class="filter-btn active" data-filter="diffs">Changed only</button>
+          <button class="filter-btn" data-filter="all">All matched</button>
+        </div>
+        <div class="quick-actions">
+          <button class="btn btn-sm" id="expandAllBtn">Expand all</button>
+          <button class="btn btn-sm" id="collapseAllBtn">Collapse all</button>
+        </div>
+      </div>
+
+      <!-- Product diff list -->
+      <div class="diff-list" id="diffList"></div>
+
+      <!-- Merge button -->
+      <div style="text-align:center;margin-top:1.5rem;margin-bottom:2rem;">
+        <button id="mergeBtn" class="btn btn-success btn-full" style="max-width:500px;">
+          Generate Merged CSV
+        </button>
+        <div id="mergeDownload" class="download-links" style="justify-content:center;margin-top:1rem;"></div>
+      </div>
     </div>
   </div>
 
@@ -483,6 +1001,50 @@
   </div>
 
   <script>
+    // =========================================================================
+    // Shared helpers
+    // =========================================================================
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function copyText(text, el) {
+      navigator.clipboard.writeText(text).then(() => {
+        if (el) {
+          el.classList.remove('copied');
+          void el.offsetWidth;
+          el.classList.add('copied');
+          setTimeout(() => el.classList.remove('copied'), 1300);
+        }
+      });
+    }
+
+    function makeCopyable(td, text) {
+      td.classList.add('copyable');
+      td.title = 'Click to copy';
+      td.addEventListener('click', (e) => {
+        if (e.target.closest('.img-thumb')) return;
+        copyText(text, td);
+      });
+    }
+
+    // =========================================================================
+    // Tab switching
+    // =========================================================================
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      });
+    });
+
+    // =========================================================================
+    // SCRAPE TAB (preserved from original)
+    // =========================================================================
     const form = document.getElementById('scrapeForm');
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
@@ -495,29 +1057,6 @@
     const imgModalOpen = document.getElementById('imgModalOpen');
     const imgModalCopy = document.getElementById('imgModalCopy');
 
-    // --- Copy to clipboard helper ---
-    function copyText(text, el) {
-      navigator.clipboard.writeText(text).then(() => {
-        if (el) {
-          el.classList.remove('copied');
-          void el.offsetWidth; // reflow
-          el.classList.add('copied');
-          setTimeout(() => el.classList.remove('copied'), 1300);
-        }
-      });
-    }
-
-    // --- Click-to-copy on table cells ---
-    function makeCopyable(td, text) {
-      td.classList.add('copyable');
-      td.title = 'Click to copy';
-      td.addEventListener('click', (e) => {
-        if (e.target.closest('.img-thumb')) return; // don't interfere with image clicks
-        copyText(text, td);
-      });
-    }
-
-    // --- Image modal ---
     function openImgModal(url) {
       imgModalSrc.src = url;
       imgModalOpen.href = url;
@@ -539,23 +1078,19 @@
       if (e.key === 'Escape') imgModal.classList.remove('open');
     });
 
-    // --- Build product table ---
     function renderProducts(products) {
       productTableBody.innerHTML = '';
       products.forEach((p, i) => {
         const tr = document.createElement('tr');
 
-        // #
         const numTd = document.createElement('td');
         numTd.textContent = i + 1;
         numTd.style.color = 'var(--muted)';
         tr.appendChild(numTd);
 
-        // Image
         const imgTd = document.createElement('td');
         const imgDiv = document.createElement('div');
         imgDiv.className = 'img-cell';
-
         (p.images || []).slice(0, 3).forEach(url => {
           const img = document.createElement('img');
           img.className = 'img-thumb';
@@ -565,18 +1100,15 @@
           img.addEventListener('click', () => openImgModal(url));
           imgDiv.appendChild(img);
         });
-
         if ((p.images || []).length > 3) {
           const more = document.createElement('span');
           more.className = 'img-more';
           more.textContent = `+${p.images.length - 3}`;
           imgDiv.appendChild(more);
         }
-
         imgTd.appendChild(imgDiv);
         tr.appendChild(imgTd);
 
-        // Title
         const titleTd = document.createElement('td');
         const titleSpan = document.createElement('span');
         titleSpan.className = 'cell-text';
@@ -586,19 +1118,16 @@
         makeCopyable(titleTd, p.title);
         tr.appendChild(titleTd);
 
-        // Handle
         const handleTd = document.createElement('td');
         handleTd.innerHTML = `<span class="cell-text">${esc(p.handle)}</span>`;
         makeCopyable(handleTd, p.handle);
         tr.appendChild(handleTd);
 
-        // Vendor
         const vendorTd = document.createElement('td');
         vendorTd.innerHTML = `<span class="cell-text">${esc(p.vendor || '\u2014')}</span>`;
         if (p.vendor) makeCopyable(vendorTd, p.vendor);
         tr.appendChild(vendorTd);
 
-        // Price
         const priceTd = document.createElement('td');
         let priceHtml = p.price ? `$${p.price}` : '\u2014';
         if (p.compare_at_price) {
@@ -609,19 +1138,16 @@
         if (p.price) makeCopyable(priceTd, p.price);
         tr.appendChild(priceTd);
 
-        // SKU
         const skuTd = document.createElement('td');
         skuTd.innerHTML = `<span class="cell-text">${esc(p.sku || '\u2014')}</span>`;
         if (p.sku) makeCopyable(skuTd, p.sku);
         tr.appendChild(skuTd);
 
-        // Type
         const typeTd = document.createElement('td');
         typeTd.innerHTML = `<span class="cell-text">${esc(p.product_type || '\u2014')}</span>`;
         if (p.product_type) makeCopyable(typeTd, p.product_type);
         tr.appendChild(typeTd);
 
-        // Tags
         const tagsTd = document.createElement('td');
         const tagDiv = document.createElement('div');
         tagDiv.className = 'tag-list';
@@ -642,13 +1168,11 @@
         makeCopyable(tagsTd, (p.tags || []).join(', '));
         tr.appendChild(tagsTd);
 
-        // Variants
         const varTd = document.createElement('td');
         varTd.textContent = p.variant_count || 1;
         varTd.style.textAlign = 'center';
         tr.appendChild(varTd);
 
-        // Status
         const statusTd = document.createElement('td');
         if (p.sold_out) {
           statusTd.innerHTML = '<span class="badge badge-sold-out">Sold Out</span>';
@@ -661,13 +1185,6 @@
       });
     }
 
-    function esc(s) {
-      const d = document.createElement('div');
-      d.textContent = s;
-      return d.innerHTML;
-    }
-
-    // --- Form submit ---
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -680,7 +1197,7 @@
 
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<span class="spinner"></span> Scraping&hellip;';
-      status.className = 'info';
+      status.className = 'status-box info';
       status.innerHTML = 'Connecting to Squarespace site and scraping products&hellip; This may take a few minutes for large stores.';
       productTableWrap.style.display = 'none';
 
@@ -719,10 +1236,9 @@
         }
 
         html += '</div>';
-        status.className = 'success';
+        status.className = 'status-box success';
         status.innerHTML = html;
 
-        // Render product table
         if (data.products && data.products.length > 0) {
           tableTitle.textContent = `Products (${data.products.length})`;
           tableDownloads.innerHTML = '';
@@ -736,11 +1252,380 @@
           productTableWrap.style.display = 'block';
         }
       } catch (err) {
-        status.className = 'error';
+        status.className = 'status-box error';
         status.innerHTML = `Error: ${err.message}`;
       } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = 'Start Scraping';
+      }
+    });
+
+    // =========================================================================
+    // MERGE TAB
+    // =========================================================================
+    const shopifyCsvInput = document.getElementById('shopifyCsvInput');
+    const sqspcCsvInput = document.getElementById('sqspcCsvInput');
+    const shopifyUploadBox = document.getElementById('shopifyUploadBox');
+    const sqspcUploadBox = document.getElementById('sqspcUploadBox');
+    const compareBtn = document.getElementById('compareBtn');
+    const mergeStatus = document.getElementById('mergeStatus');
+    const mergeResultsWrap = document.getElementById('mergeResultsWrap');
+    const mergeBtn = document.getElementById('mergeBtn');
+    const mergeDownload = document.getElementById('mergeDownload');
+
+    let compareData = null;  // stores the comparison response
+    let currentFilter = 'diffs';
+
+    // --- File upload handlers ---
+    function setupUploadBox(input, box, nameEl) {
+      input.addEventListener('change', () => {
+        if (input.files.length > 0) {
+          box.classList.add('has-file');
+          nameEl.textContent = input.files[0].name;
+        } else {
+          box.classList.remove('has-file');
+          nameEl.textContent = '';
+        }
+        updateCompareBtn();
+      });
+
+      // Drag and drop
+      box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('dragover'); });
+      box.addEventListener('dragleave', () => box.classList.remove('dragover'));
+      box.addEventListener('drop', (e) => {
+        e.preventDefault();
+        box.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+          input.files = e.dataTransfer.files;
+          input.dispatchEvent(new Event('change'));
+        }
+      });
+    }
+
+    setupUploadBox(shopifyCsvInput, shopifyUploadBox, document.getElementById('shopifyFileName'));
+    setupUploadBox(sqspcCsvInput, sqspcUploadBox, document.getElementById('sqspcFileName'));
+
+    function updateCompareBtn() {
+      compareBtn.disabled = !(shopifyCsvInput.files.length > 0 && sqspcCsvInput.files.length > 0);
+    }
+
+    // --- Compare ---
+    compareBtn.addEventListener('click', async () => {
+      const formData = new FormData();
+      formData.append('shopify_csv', shopifyCsvInput.files[0]);
+      formData.append('squarespace_csv', sqspcCsvInput.files[0]);
+
+      compareBtn.disabled = true;
+      compareBtn.innerHTML = '<span class="spinner"></span> Comparing&hellip;';
+      mergeStatus.className = 'status-box info';
+      mergeStatus.innerHTML = 'Parsing and comparing CSVs&hellip;';
+      mergeResultsWrap.style.display = 'none';
+
+      try {
+        const resp = await fetch('/compare', {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Compare failed');
+
+        compareData = data;
+        mergeStatus.className = 'status-box success';
+        mergeStatus.innerHTML = `Compared <strong>${data.summary.total_shopify}</strong> Shopify products with <strong>${data.summary.total_squarespace}</strong> Squarespace products. <strong>${data.summary.with_diffs}</strong> products have differences.`;
+
+        renderMergeResults(data);
+        mergeResultsWrap.style.display = 'block';
+
+      } catch (err) {
+        mergeStatus.className = 'status-box error';
+        mergeStatus.innerHTML = `Error: ${err.message}`;
+      } finally {
+        compareBtn.disabled = false;
+        compareBtn.textContent = 'Compare Products';
+        updateCompareBtn();
+      }
+    });
+
+    // --- Render comparison results ---
+    function renderMergeResults(data) {
+      // Summary stats
+      const summary = data.summary;
+      document.getElementById('mergeSummary').innerHTML = `
+        <div class="stat-card">
+          <div class="stat-value">${summary.matched}</div>
+          <div class="stat-label">Matched</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--warning)">${summary.with_diffs}</div>
+          <div class="stat-label">With Differences</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--success)">${summary.shopify_only}</div>
+          <div class="stat-label">Shopify Only</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" style="color:var(--accent)">${summary.squarespace_only}</div>
+          <div class="stat-label">Squarespace Only</div>
+        </div>
+      `;
+
+      // Unmatched sections
+      const unmatchedEl = document.getElementById('unmatchedSections');
+      unmatchedEl.innerHTML = '';
+
+      if (data.shopify_only.length > 0) {
+        unmatchedEl.innerHTML += `
+          <div class="unmatched-section">
+            <h3>
+              <span class="badge badge-active">Shopify only</span>
+              ${data.shopify_only.length} products only in Shopify (will be included as-is)
+            </h3>
+            <div class="unmatched-list">
+              ${data.shopify_only.map(h => `<span class="unmatched-handle">${esc(h)}</span>`).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      if (data.squarespace_only.length > 0) {
+        unmatchedEl.innerHTML += `
+          <div class="unmatched-section">
+            <h3>
+              <span class="badge" style="background:rgba(108,99,255,0.15);color:var(--accent)">Squarespace only</span>
+              ${data.squarespace_only.length} products only in Squarespace (will be added)
+            </h3>
+            <div class="unmatched-list">
+              ${data.squarespace_only.map(h => `<span class="unmatched-handle">${esc(h)}</span>`).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      // Column defaults
+      renderColumnDefaults(data);
+
+      // Product diff cards
+      renderDiffCards(data);
+
+      // Reset merge download
+      mergeDownload.innerHTML = '';
+    }
+
+    // --- Key fields for column defaults (most commonly tweaked) ---
+    const KEY_FIELDS = [
+      'Title', 'Body (HTML)', 'Vendor', 'Type', 'Tags',
+      'Published', 'Variant Price', 'Variant Compare At Price',
+      'Variant SKU', 'Image Src', 'SEO Title', 'SEO Description', 'Status'
+    ];
+
+    function renderColumnDefaults(data) {
+      const container = document.getElementById('colDefaults');
+      const grid = document.getElementById('colDefaultsGrid');
+      container.style.display = 'block';
+      grid.innerHTML = '';
+
+      const labels = data.field_labels || {};
+
+      KEY_FIELDS.forEach(field => {
+        const label = labels[field] || field;
+        const item = document.createElement('div');
+        item.className = 'col-default-item';
+        item.innerHTML = `
+          <span class="field-name" title="${esc(field)}">${esc(label)}</span>
+          <select class="strategy-select col-default-select" data-field="${esc(field)}">
+            <option value="shopify" selected>Keep Shopify</option>
+            <option value="squarespace">Use Squarespace</option>
+            <option value="fill_empty">Fill empty</option>
+          </select>
+        `;
+        grid.appendChild(item);
+      });
+
+      // When a column default changes, update all matching per-product selects
+      grid.addEventListener('change', (e) => {
+        if (!e.target.classList.contains('col-default-select')) return;
+        const field = e.target.dataset.field;
+        const value = e.target.value;
+        document.querySelectorAll(`.product-strategy-select[data-field="${CSS.escape(field)}"]`).forEach(sel => {
+          sel.value = value;
+        });
+      });
+    }
+
+    function renderDiffCards(data) {
+      const list = document.getElementById('diffList');
+      list.innerHTML = '';
+
+      const labels = data.field_labels || {};
+
+      data.matched.forEach(product => {
+        const card = document.createElement('div');
+        card.className = 'diff-card';
+        card.dataset.handle = product.handle;
+        card.dataset.hasDiff = product.has_diff ? '1' : '0';
+
+        const diffCount = Object.values(product.fields).filter(f => f.changed).length;
+
+        card.innerHTML = `
+          <div class="diff-card-header">
+            <span class="diff-card-title">${esc(product.title)}</span>
+            <div class="diff-card-meta">
+              <span class="diff-count ${diffCount > 0 ? 'has-diffs' : 'no-diffs'}">
+                ${diffCount > 0 ? diffCount + ' diff' + (diffCount > 1 ? 's' : '') : 'identical'}
+              </span>
+              <span class="diff-arrow">&#9654;</span>
+            </div>
+          </div>
+          <div class="diff-card-body"></div>
+        `;
+
+        // Toggle open/close
+        card.querySelector('.diff-card-header').addEventListener('click', () => {
+          card.classList.toggle('open');
+          if (card.classList.contains('open') && !card.dataset.rendered) {
+            renderDiffBody(card, product, labels);
+            card.dataset.rendered = '1';
+          }
+        });
+
+        list.appendChild(card);
+      });
+
+      applyFilter();
+    }
+
+    function renderDiffBody(card, product, labels) {
+      const body = card.querySelector('.diff-card-body');
+
+      // Source label header
+      body.innerHTML = `
+        <div class="source-labels">
+          <span>Field</span>
+          <span class="source-label-sh">Shopify value</span>
+          <span>Action</span>
+          <span class="source-label-sq">Squarespace value</span>
+        </div>
+      `;
+
+      // Show changed fields first, then unchanged
+      const fields = Object.entries(product.fields);
+      const changed = fields.filter(([, f]) => f.changed);
+      const unchanged = fields.filter(([, f]) => !f.changed);
+      const ordered = [...changed, ...unchanged];
+
+      ordered.forEach(([field, info]) => {
+        const label = labels[field] || field;
+        const shDisplay = info.shopify || '(empty)';
+        const sqDisplay = info.squarespace || '(empty)';
+        const isEmpty = (v) => !v || v.trim() === '';
+
+        const row = document.createElement('div');
+        row.className = 'diff-field-row' + (info.changed ? '' : ' unchanged');
+        row.innerHTML = `
+          <div class="diff-field-name" title="${esc(field)}">${esc(label)}</div>
+          <div class="diff-val shopify-val ${isEmpty(info.shopify) ? 'empty-val' : ''}">${esc(shDisplay).substring(0, 300)}${shDisplay.length > 300 ? '&hellip;' : ''}</div>
+          <select class="strategy-select product-strategy-select" data-handle="${esc(product.handle)}" data-field="${esc(field)}">
+            <option value="shopify" selected>Keep Shopify</option>
+            <option value="squarespace">Use Squarespace</option>
+            <option value="fill_empty">Fill empty</option>
+          </select>
+          <div class="diff-val sqspc-val ${isEmpty(info.squarespace) ? 'empty-val' : ''}">${esc(sqDisplay).substring(0, 300)}${sqDisplay.length > 300 ? '&hellip;' : ''}</div>
+        `;
+
+        body.appendChild(row);
+      });
+    }
+
+    // --- Filter ---
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentFilter = btn.dataset.filter;
+        applyFilter();
+      });
+    });
+
+    function applyFilter() {
+      document.querySelectorAll('.diff-card').forEach(card => {
+        if (currentFilter === 'diffs') {
+          card.style.display = card.dataset.hasDiff === '1' ? '' : 'none';
+        } else {
+          card.style.display = '';
+        }
+      });
+    }
+
+    // --- Expand / collapse all ---
+    document.getElementById('expandAllBtn').addEventListener('click', () => {
+      document.querySelectorAll('.diff-card').forEach(card => {
+        if (card.style.display === 'none') return;
+        card.classList.add('open');
+        if (!card.dataset.rendered && compareData) {
+          const handle = card.dataset.handle;
+          const product = compareData.matched.find(m => m.handle === handle);
+          if (product) {
+            renderDiffBody(card, product, compareData.field_labels || {});
+            card.dataset.rendered = '1';
+          }
+        }
+      });
+    });
+
+    document.getElementById('collapseAllBtn').addEventListener('click', () => {
+      document.querySelectorAll('.diff-card').forEach(card => card.classList.remove('open'));
+    });
+
+    // --- Generate merged CSV ---
+    mergeBtn.addEventListener('click', async () => {
+      if (!compareData) return;
+
+      // Collect decisions
+      const defaults = {};
+      document.querySelectorAll('.col-default-select').forEach(sel => {
+        defaults[sel.dataset.field] = sel.value;
+      });
+
+      const products = {};
+      document.querySelectorAll('.product-strategy-select').forEach(sel => {
+        const handle = sel.dataset.handle;
+        const field = sel.dataset.field;
+        if (!products[handle]) products[handle] = {};
+        products[handle][field] = sel.value;
+      });
+
+      const decisions = {
+        defaults,
+        products,
+        include_shopify_only: true,
+        include_squarespace_only: true,
+      };
+
+      mergeBtn.disabled = true;
+      mergeBtn.innerHTML = '<span class="spinner"></span> Generating&hellip;';
+      mergeDownload.innerHTML = '';
+
+      try {
+        const resp = await fetch('/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            run_id: compareData.run_id,
+            decisions,
+          }),
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Merge failed');
+
+        mergeDownload.innerHTML = `<a href="/download/${data.merged_csv}">&#11015; Download Merged CSV</a>`;
+
+      } catch (err) {
+        mergeDownload.innerHTML = `<span style="color:var(--error)">Error: ${err.message}</span>`;
+      } finally {
+        mergeBtn.disabled = false;
+        mergeBtn.textContent = 'Generate Merged CSV';
       }
     });
   </script>

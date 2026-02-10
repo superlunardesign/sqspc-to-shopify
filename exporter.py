@@ -210,8 +210,7 @@ def export_products_csv(products: list[dict], dest: IO[str] | None = None) -> st
 
     if dest is None:
         return buf.getvalue()
-    buf.seek(0)
-    return buf.read()
+    return ""
 
 
 def export_reviews_csv(reviews: list[dict], dest: IO[str] | None = None) -> str:
@@ -252,5 +251,4 @@ def export_reviews_csv(reviews: list[dict], dest: IO[str] | None = None) -> str:
 
     if dest is None:
         return buf.getvalue()
-    buf.seek(0)
-    return buf.read()
+    return ""
