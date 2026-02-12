@@ -1303,7 +1303,6 @@ def scrape_reviews(
             _add_reviews(reviews)
             _dbg("HTML reviews parsed", count=len(reviews))
             logger.info("Found %d reviews from HTML on %s", len(reviews), probe_url)
-            break
         else:
             _dbg(
                 "HTML container empty (JS-rendered)",
@@ -1311,39 +1310,53 @@ def scrape_reviews(
             )
             logger.info("Review container found but 0 reviews parsed (JS-rendered)")
 
-            # Method 2b: crumb-authenticated API retry
-            crumb = _extract_crumb(html)
-            _dbg("Crumb token search", found=bool(crumb), crumb=crumb[:20] + "..." if crumb else "")
-            if crumb:
-                crumb_headers = {
-                    **api_headers,
-                    "X-Requested-With": "XMLHttpRequest",
-                }
-                crumb_endpoints = [
-                    "/api/commerce/reviews/published?page=0&size=100",
-                    "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
-                    "/api/commerce/reviews?type=STORE&page=0&size=100",
-                ]
-                for ep in crumb_endpoints:
-                    sep = "&" if "?" in ep else "?"
-                    crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
-                    review_list, _ = _try_review_api(
-                        crumb_url, f"[crumb] {ep}", crumb_headers,
-                    )
-                    if review_list:
-                        for rv in review_list:
-                            _add_reviews([_normalise_review(rv, "", "")])
-                        break
-                    _limiter.wait()
-
-                if all_reviews:
-                    for r in all_reviews:
-                        handle = r.get("product_handle", "")
-                        if handle and handle in handle_titles:
-                            r["product_title"] = handle_titles[handle]
+        # Always try crumb API to get ALL reviews (HTML only has first page,
+        # "Show More" loads the rest via JS).
+        crumb = _extract_crumb(html)
+        _dbg("Crumb token search", found=bool(crumb), crumb=crumb[:20] + "..." if crumb else "")
+        if crumb:
+            crumb_headers = {
+                **api_headers,
+                "X-Requested-With": "XMLHttpRequest",
+            }
+            crumb_endpoints = [
+                "/api/commerce/reviews?type=STORE&page=0&size=100",
+                "/api/commerce/reviews/published?page=0&size=100",
+                "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
+            ]
+            for ep in crumb_endpoints:
+                sep = "&" if "?" in ep else "?"
+                crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
+                review_list, _ = _try_review_api(
+                    crumb_url, f"[crumb] {ep}", crumb_headers,
+                )
+                if review_list:
+                    for rv in review_list:
+                        normalised = _normalise_review(rv, "", "")
+                        # API reviews may include product info — extract it
+                        product_info = rv.get("product") or {}
+                        if product_info:
+                            api_handle = product_info.get("urlSlug", "") or product_info.get("slug", "")
+                            api_title = product_info.get("title", "")
+                            if api_handle:
+                                normalised["product_handle"] = api_handle
+                            if api_title:
+                                normalised["product_title"] = api_title
+                        handle = normalised.get("product_handle", "")
+                        if handle and handle in handle_titles and not normalised.get("product_title"):
+                            normalised["product_title"] = handle_titles[handle]
+                        _add_reviews([normalised])
+                    _dbg("Crumb API reviews", count=len(review_list))
                     break
+                _limiter.wait()
+
+        if all_reviews:
+            break
 
         _limiter.wait()
+
+    # Sort reviews by product so they're grouped in the CSV
+    all_reviews.sort(key=lambda r: (r.get("product_handle", ""), r.get("created_at", "")))
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
     _dbg("Final result", total_reviews=len(all_reviews))
