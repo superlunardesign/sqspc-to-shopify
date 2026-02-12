@@ -1117,6 +1117,7 @@ def scrape_reviews(
     # ------------------------------------------------------------------
     # Debug: Fetch one product page and dump the full HTML
     # ------------------------------------------------------------------
+    cached_html = {}  # url -> html, reused in Method 2
     products_with_urls = [p for p in products if p.get("url")]
     if products_with_urls:
         sample = products_with_urls[0]
@@ -1124,6 +1125,7 @@ def scrape_reviews(
         logger.info("Debug: fetching full HTML for %s", sample_url)
         sample_html = _get_html(session, sample_url)
         if sample_html:
+            cached_html[sample_url] = sample_html
             _dbg(
                 f"Full product page HTML: {sample['title']}",
                 url=sample_url,
@@ -1247,99 +1249,101 @@ def scrape_reviews(
         _dbg("Method 1 result", reviews_found=len(api_reviews))
 
     # ------------------------------------------------------------------
-    # Method 2: HTML fallback — parse server-rendered reviews
+    # Method 2: HTML scrape — parse server-rendered reviews
+    # Always runs (store reviews are only in HTML, not the API).
     # ------------------------------------------------------------------
-    if not all_reviews:
-        _dbg("Method 1 failed", note="No reviews from API, trying HTML scrape")
-        logger.info("Review API found nothing, trying HTML scrape")
-        products_with_urls = [p for p in products if p.get("url")]
-        for probe_product in products_with_urls[:3]:
-            probe_url = probe_product["url"]
-            logger.info("Fetching reviews from product page: %s", probe_url)
-            html = _get_html(session, probe_url)
-            if not html:
-                _dbg("HTML fetch failed", url=probe_url)
-                _limiter.wait()
-                continue
-
-            has_container = "reviewsContainer" in html or "reviewDetails" in html
-
-            # Extract the review section HTML for debug display
-            soup_dbg = BeautifulSoup(html, "html.parser")
-            review_section = soup_dbg.select_one(
-                ".reviewsSection, .reviewsContainer, "
-                "[data-controller='ProductReviewsController']"
-            )
-            review_html_snippet = ""
-            if review_section:
-                review_html_snippet = review_section.prettify()[:5000]
-
-            _dbg(
-                "HTML page fetched",
-                url=probe_url,
-                bytes=len(html),
-                has_review_container=has_container,
-                review_section_snippet=review_html_snippet or "(no review section found)",
-            )
-            logger.info(
-                "HTML page %s: %d bytes, review container: %s",
-                probe_url, len(html), has_container,
-            )
-
-            if not has_container:
-                _limiter.wait()
-                continue
-
-            reviews = _scrape_reviews_from_html(html, "", "")
-            if reviews:
-                for r in reviews:
-                    handle = r.get("product_handle", "")
-                    if handle and handle in handle_titles:
-                        r["product_title"] = handle_titles[handle]
-                _add_reviews(reviews)
-                _dbg("HTML reviews parsed", count=len(reviews))
-                logger.info("Found %d reviews from HTML on %s", len(reviews), probe_url)
-                break
-            else:
-                _dbg(
-                    "HTML container empty (JS-rendered)",
-                    note="Container exists but 0 div.reviewDetails found by parser",
-                )
-                logger.info("Review container found but 0 reviews parsed (JS-rendered)")
-
-                # Method 2b: crumb-authenticated API retry
-                crumb = _extract_crumb(html)
-                _dbg("Crumb token search", found=bool(crumb), crumb=crumb[:20] + "..." if crumb else "")
-                if crumb:
-                    crumb_headers = {
-                        **api_headers,
-                        "X-Requested-With": "XMLHttpRequest",
-                    }
-                    crumb_endpoints = [
-                        "/api/commerce/reviews/published?page=0&size=100",
-                        "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
-                        "/api/commerce/reviews?type=STORE&page=0&size=100",
-                    ]
-                    for ep in crumb_endpoints:
-                        sep = "&" if "?" in ep else "?"
-                        crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
-                        review_list, _ = _try_review_api(
-                            crumb_url, f"[crumb] {ep}", crumb_headers,
-                        )
-                        if review_list:
-                            for rv in review_list:
-                                _add_reviews([_normalise_review(rv, "", "")])
-                            break
-                        _limiter.wait()
-
-                    if all_reviews:
-                        for r in all_reviews:
-                            handle = r.get("product_handle", "")
-                            if handle and handle in handle_titles:
-                                r["product_title"] = handle_titles[handle]
-                        break
-
+    api_count = len(all_reviews)
+    _dbg("Starting HTML scrape", note=f"API found {api_count} reviews, now checking HTML for more")
+    logger.info("Checking HTML for server-rendered reviews (API found %d)", api_count)
+    products_with_urls = [p for p in products if p.get("url")]
+    for probe_product in products_with_urls[:3]:
+        probe_url = probe_product["url"]
+        logger.info("Fetching reviews from product page: %s", probe_url)
+        # Reuse cached HTML from debug dump if available
+        html = cached_html.get(probe_url) or _get_html(session, probe_url)
+        if not html:
+            _dbg("HTML fetch failed", url=probe_url)
             _limiter.wait()
+            continue
+
+        has_container = "reviewsContainer" in html or "reviewDetails" in html
+
+        # Extract the review section HTML for debug display
+        soup_dbg = BeautifulSoup(html, "html.parser")
+        review_section = soup_dbg.select_one(
+            ".reviewsSection, .reviewsContainer, "
+            "[data-controller='ProductReviewsController']"
+        )
+        review_html_snippet = ""
+        if review_section:
+            review_html_snippet = review_section.prettify()[:5000]
+
+        _dbg(
+            "HTML page fetched",
+            url=probe_url,
+            bytes=len(html),
+            has_review_container=has_container,
+            review_section_snippet=review_html_snippet or "(no review section found)",
+        )
+        logger.info(
+            "HTML page %s: %d bytes, review container: %s",
+            probe_url, len(html), has_container,
+        )
+
+        if not has_container:
+            _limiter.wait()
+            continue
+
+        reviews = _scrape_reviews_from_html(html, "", "")
+        if reviews:
+            for r in reviews:
+                handle = r.get("product_handle", "")
+                if handle and handle in handle_titles:
+                    r["product_title"] = handle_titles[handle]
+            _add_reviews(reviews)
+            _dbg("HTML reviews parsed", count=len(reviews))
+            logger.info("Found %d reviews from HTML on %s", len(reviews), probe_url)
+            break
+        else:
+            _dbg(
+                "HTML container empty (JS-rendered)",
+                note="Container exists but 0 div.reviewDetails found by parser",
+            )
+            logger.info("Review container found but 0 reviews parsed (JS-rendered)")
+
+            # Method 2b: crumb-authenticated API retry
+            crumb = _extract_crumb(html)
+            _dbg("Crumb token search", found=bool(crumb), crumb=crumb[:20] + "..." if crumb else "")
+            if crumb:
+                crumb_headers = {
+                    **api_headers,
+                    "X-Requested-With": "XMLHttpRequest",
+                }
+                crumb_endpoints = [
+                    "/api/commerce/reviews/published?page=0&size=100",
+                    "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
+                    "/api/commerce/reviews?type=STORE&page=0&size=100",
+                ]
+                for ep in crumb_endpoints:
+                    sep = "&" if "?" in ep else "?"
+                    crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
+                    review_list, _ = _try_review_api(
+                        crumb_url, f"[crumb] {ep}", crumb_headers,
+                    )
+                    if review_list:
+                        for rv in review_list:
+                            _add_reviews([_normalise_review(rv, "", "")])
+                        break
+                    _limiter.wait()
+
+                if all_reviews:
+                    for r in all_reviews:
+                        handle = r.get("product_handle", "")
+                        if handle and handle in handle_titles:
+                            r["product_title"] = handle_titles[handle]
+                    break
+
+        _limiter.wait()
 
     logger.info("Scraped %d reviews total.", len(all_reviews))
     _dbg("Final result", total_reviews=len(all_reviews))
