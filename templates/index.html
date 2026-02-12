@@ -529,7 +529,7 @@
       white-space: pre-wrap;
       word-break: break-all;
       font-size: 0.68rem;
-      max-height: 300px;
+      max-height: 60vh;
       overflow-y: auto;
       margin: 0.35rem 0;
     }
@@ -1084,6 +1084,10 @@
             <input type="checkbox" name="scrape_products" checked>
             Scrape products
           </label>
+          <label style="color:var(--accent);">
+            <input type="checkbox" name="test_mode">
+            Test mode (1 product only)
+          </label>
         </div>
 
         <button type="submit" id="submitBtn" class="btn btn-full">Start Scraping</button>
@@ -1555,7 +1559,7 @@
         const skipKeys = new Set(['label']);
         for (const [k, v] of Object.entries(entry)) {
           if (skipKeys.has(k)) continue;
-          if (k === 'body_snippet' || k === 'review_section_snippet') {
+          if (k === 'html' || k === 'body_snippet' || k === 'review_section_snippet') {
             // Show as collapsible pre block
             const dt = document.createElement('dt');
             dt.textContent = k;
@@ -1593,6 +1597,7 @@
       const shopPath = document.getElementById('shopPath').value.trim() || '/shop';
       const scrapeReviews = form.querySelector('[name="scrape_reviews"]').checked;
       const scrapeProducts = form.querySelector('[name="scrape_products"]').checked;
+      const testMode = form.querySelector('[name="test_mode"]').checked;
 
       if (!siteUrl) return;
 
@@ -1612,6 +1617,7 @@
             shop_path: shopPath,
             scrape_reviews: scrapeReviews,
             scrape_products: scrapeProducts,
+            test_mode: testMode,
           }),
         });
 

@@ -580,7 +580,7 @@ def _enrich_product_from_html(session: requests.Session, product: dict) -> dict:
     return product
 
 
-def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
+def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int = 0) -> list[dict]:
     """Scrape all products from a Squarespace store.
 
     Parameters
@@ -589,6 +589,8 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
         The root URL of the Squarespace site, e.g. ``https://www.example.com``.
     shop_path : str
         The path to the shop/products collection page, e.g. ``/shop``.
+    max_products : int
+        If > 0, stop after scraping this many products (test mode).
 
     Returns
     -------
@@ -643,6 +645,14 @@ def scrape_products(base_url: str, shop_path: str = "/shop") -> list[dict]:
                 logger.info("Scraped product: %s", product["title"])
 
             _limiter.wait()
+
+            if max_products and len(products) >= max_products:
+                break
+
+        # Stop if hit product limit
+        if max_products and len(products) >= max_products:
+            logger.info("Test mode: stopping after %d product(s).", len(products))
+            break
 
         # Stop if every item on this page was already seen (looping)
         if new_on_page == 0:
@@ -1103,6 +1113,26 @@ def scrape_reviews(
 
     # Cool down after product scraping to let rate limits reset
     _limiter.cooldown(20)
+
+    # ------------------------------------------------------------------
+    # Debug: Fetch one product page and dump the full HTML
+    # ------------------------------------------------------------------
+    products_with_urls = [p for p in products if p.get("url")]
+    if products_with_urls:
+        sample = products_with_urls[0]
+        sample_url = sample["url"]
+        logger.info("Debug: fetching full HTML for %s", sample_url)
+        sample_html = _get_html(session, sample_url)
+        if sample_html:
+            _dbg(
+                f"Full product page HTML: {sample['title']}",
+                url=sample_url,
+                bytes=len(sample_html),
+                html=sample_html,
+            )
+        else:
+            _dbg("Failed to fetch sample product page", url=sample_url)
+        _limiter.wait()
 
     # ------------------------------------------------------------------
     # Method 1: Squarespace Review API

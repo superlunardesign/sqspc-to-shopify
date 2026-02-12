@@ -53,6 +53,7 @@ def scrape():
     shop_path = (data.get("shop_path") or "/shop").strip()
     do_reviews = data.get("scrape_reviews", True)
     do_products = data.get("scrape_products", True)
+    test_mode = data.get("test_mode", False)
 
     if not site_url:
         return jsonify({"error": "site_url is required"}), 400
@@ -73,8 +74,11 @@ def scrape():
         products = []
         scrape_session = None
         if do_products:
-            logger.info("Starting product scrape for %s%s", site_url, shop_path)
-            products, scrape_session = scrape_products(site_url, shop_path)
+            logger.info("Starting product scrape for %s%s%s", site_url, shop_path,
+                        " (TEST MODE: 1 product)" if test_mode else "")
+            products, scrape_session = scrape_products(
+                site_url, shop_path, max_products=1 if test_mode else 0,
+            )
             result["product_count"] = len(products)
             result["sold_out_count"] = sum(
                 1 for p in products if p.get("sold_out")
