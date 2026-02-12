@@ -115,8 +115,11 @@ def scrape():
         # ----- Reviews -----------------------------------------------------
         if do_reviews and products:
             logger.info("Starting review scrape for %d products", len(products))
-            reviews = scrape_reviews(site_url, products, session=scrape_session)
+            reviews, review_debug = scrape_reviews(
+                site_url, products, session=scrape_session,
+            )
             result["review_count"] = len(reviews)
+            result["review_debug"] = review_debug
 
             if reviews:
                 fname = f"reviews_{run_id}.csv"

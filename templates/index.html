@@ -433,6 +433,126 @@
       color: var(--warning);
     }
 
+    /* ---- Review Debug Panel ---- */
+    #reviewDebugWrap {
+      margin-top: 2rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .debug-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      background: var(--surface);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .debug-header h2 {
+      font-size: 0.85rem;
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .debug-toggle-arrow {
+      font-size: 0.7rem;
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+
+    .debug-toggle-arrow.open {
+      transform: rotate(90deg);
+      color: var(--accent);
+    }
+
+    .debug-body {
+      max-height: 70vh;
+      overflow-y: auto;
+      padding: 0.75rem 1rem;
+    }
+
+    .debug-entry {
+      margin-bottom: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .debug-entry-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .debug-entry-header .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .debug-entry-header .status-dot.ok { background: #22c55e; }
+    .debug-entry-header .status-dot.err { background: #ef4444; }
+    .debug-entry-header .status-dot.info { background: #3b82f6; }
+    .debug-entry-header .status-dot.warn { background: #f59e0b; }
+
+    .debug-entry-meta {
+      margin-left: auto;
+      font-weight: 400;
+      color: var(--muted);
+      font-size: 0.7rem;
+    }
+
+    .debug-entry-body {
+      display: none;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.72rem;
+      line-height: 1.5;
+    }
+
+    .debug-entry-body.open { display: block; }
+
+    .debug-entry-body pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 0.68rem;
+      max-height: 300px;
+      overflow-y: auto;
+      margin: 0.35rem 0;
+    }
+
+    .debug-kv {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.2rem 0.75rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .debug-kv dt {
+      font-weight: 600;
+      color: var(--accent);
+      white-space: nowrap;
+    }
+
+    .debug-kv dd {
+      margin: 0;
+      color: var(--text);
+      word-break: break-all;
+    }
+
     /* ---- Expandable detail row ---- */
     .detail-toggle {
       background: none;
@@ -1000,6 +1120,17 @@
         </table>
       </div>
     </div>
+
+    <!-- Review Debug Panel (shown after scrape) -->
+    <div id="reviewDebugWrap" style="display:none;">
+      <div class="debug-header" id="debugToggle">
+        <h2>Review Scrape Debug Log</h2>
+        <span class="debug-toggle-arrow">&#9654;</span>
+      </div>
+      <div class="debug-body" id="debugBody" style="display:none;">
+        <div id="debugEntries"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ============================================================ -->
@@ -1151,6 +1282,18 @@
     const imgModalSrc = document.getElementById('imgModalSrc');
     const imgModalOpen = document.getElementById('imgModalOpen');
     const imgModalCopy = document.getElementById('imgModalCopy');
+    const reviewDebugWrap = document.getElementById('reviewDebugWrap');
+    const debugToggle = document.getElementById('debugToggle');
+    const debugBody = document.getElementById('debugBody');
+    const debugEntries = document.getElementById('debugEntries');
+    const debugArrow = debugToggle.querySelector('.debug-toggle-arrow');
+
+    // Debug panel toggle
+    debugToggle.addEventListener('click', () => {
+      const open = debugBody.style.display !== 'none';
+      debugBody.style.display = open ? 'none' : 'block';
+      debugArrow.classList.toggle('open', !open);
+    });
 
     function openImgModal(url) {
       imgModalSrc.src = url;
@@ -1367,6 +1510,82 @@
       });
     }
 
+    function renderDebugLog(entries) {
+      debugEntries.innerHTML = '';
+      if (!entries || entries.length === 0) {
+        debugEntries.innerHTML = '<p style="color:var(--muted);font-size:0.8rem;">No debug entries.</p>';
+        return;
+      }
+
+      entries.forEach((entry, i) => {
+        const div = document.createElement('div');
+        div.className = 'debug-entry';
+
+        // Determine status color
+        let dotClass = 'info';
+        const status = entry.status;
+        if (status && status >= 200 && status < 300) dotClass = 'ok';
+        else if (status && status >= 400) dotClass = 'err';
+        else if (status === 429) dotClass = 'warn';
+        if (entry.error) dotClass = 'err';
+        if (entry.label && entry.label.includes('failed')) dotClass = 'err';
+        if (entry.label && entry.label.includes('result') && entry.total_reviews > 0) dotClass = 'ok';
+
+        // Meta text
+        let meta = '';
+        if (entry.status) meta += `HTTP ${entry.status}`;
+        if (entry.bytes) meta += ` · ${(entry.bytes / 1024).toFixed(1)}KB`;
+        if (entry.reviews_found) meta += ` · ${entry.reviews_found} reviews`;
+        if (entry.total_reviews !== undefined) meta += ` · ${entry.total_reviews} total`;
+
+        const header = document.createElement('div');
+        header.className = 'debug-entry-header';
+        header.innerHTML = `
+          <span class="status-dot ${dotClass}"></span>
+          <span>${esc(entry.label || 'Step ' + (i+1))}</span>
+          <span class="debug-entry-meta">${meta}</span>
+        `;
+
+        const body = document.createElement('div');
+        body.className = 'debug-entry-body';
+
+        // Build key-value pairs
+        const dl = document.createElement('dl');
+        dl.className = 'debug-kv';
+        const skipKeys = new Set(['label']);
+        for (const [k, v] of Object.entries(entry)) {
+          if (skipKeys.has(k)) continue;
+          if (k === 'body_snippet' || k === 'review_section_snippet') {
+            // Show as collapsible pre block
+            const dt = document.createElement('dt');
+            dt.textContent = k;
+            const dd = document.createElement('dd');
+            const pre = document.createElement('pre');
+            pre.textContent = typeof v === 'string' ? v : JSON.stringify(v, null, 2);
+            dd.appendChild(pre);
+            dl.appendChild(dt);
+            dl.appendChild(dd);
+          } else {
+            const dt = document.createElement('dt');
+            dt.textContent = k;
+            const dd = document.createElement('dd');
+            dd.textContent = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            dl.appendChild(dt);
+            dl.appendChild(dd);
+          }
+        }
+        body.appendChild(dl);
+
+        header.addEventListener('click', () => {
+          body.classList.toggle('open');
+        });
+
+        div.appendChild(header);
+        div.appendChild(body);
+        debugEntries.appendChild(div);
+      });
+    }
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -1382,6 +1601,7 @@
       status.className = 'status-box info';
       status.innerHTML = 'Connecting to Squarespace site and scraping products&hellip; This may take a few minutes for large stores.';
       productTableWrap.style.display = 'none';
+      reviewDebugWrap.style.display = 'none';
 
       try {
         const resp = await fetch('/scrape', {
@@ -1432,6 +1652,12 @@
           }
           renderProducts(data.products);
           productTableWrap.style.display = 'block';
+        }
+
+        // Show review debug panel if available
+        if (data.review_debug && data.review_debug.length > 0) {
+          renderDebugLog(data.review_debug);
+          reviewDebugWrap.style.display = 'block';
         }
       } catch (err) {
         status.className = 'status-box error';
