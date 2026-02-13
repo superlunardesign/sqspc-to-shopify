@@ -1063,6 +1063,23 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                         slug, len(html), has_reviews_html,
                     )
                     if has_reviews_html:
+                        # Debug: check what the review section actually contains
+                        dbg_soup = BeautifulSoup(html, "html.parser")
+                        review_container = dbg_soup.select_one(
+                            ".reviewsContainer, .reviewsSection, "
+                            "[data-controller='ProductReviewsController']"
+                        )
+                        if review_container:
+                            container_text = review_container.get_text(strip=True)[:200]
+                            review_blocks = review_container.select("div.reviewDetails")
+                            logger.info(
+                                "Review container found: %d div.reviewDetails, "
+                                "text preview: %r",
+                                len(review_blocks), container_text,
+                            )
+                        else:
+                            logger.info("No review container element found (string match was in JS/CSS)")
+
                         page_reviews = _scrape_reviews_from_html(
                             html, title, slug,
                         )
