@@ -74,6 +74,7 @@ class _RateLimiter:
 
 # Module-level rate limiter shared across functions within a scrape run
 _limiter = _RateLimiter()
+_found_page_reviews = False
 
 # Common heading patterns for structured product sections
 SECTION_PATTERNS = {
@@ -600,9 +601,10 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
     base_url = base_url.rstrip("/")
     session = requests.Session()
 
-    # Reset the rate limiter for each scrape run
-    global _limiter
+    # Reset the rate limiter and review flag for each scrape run
+    global _limiter, _found_page_reviews
     _limiter = _RateLimiter()
+    _found_page_reviews = False
 
     products = []
     page = 1
@@ -922,6 +924,7 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                 sections[key] = json_sections[key]
 
         # ---- Fetch individual product page for more detail ----------------
+        page_reviews = []
         if product_url:
             detail_data = _get_json(session, product_url)
             if detail_data:
@@ -1028,6 +1031,21 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                         if not sections[key] and enriched.get(key):
                             sections[key] = enriched[key]
 
+                # --- Grab any reviews rendered on this product page ---
+                # Only parse reviews from the first page that has them
+                # (store reviews repeat on every product page).
+                global _found_page_reviews
+                if not _found_page_reviews:
+                    page_reviews = _scrape_reviews_from_html(
+                        html, title, slug,
+                    )
+                    if page_reviews:
+                        _found_page_reviews = True
+                        logger.info(
+                            "Found %d reviews on product page %s",
+                            len(page_reviews), slug,
+                        )
+
         # ---- Tags ---------------------------------------------------------
         tags = item.get("tags", []) or []
         categories = item.get("categories", []) or []
@@ -1056,6 +1074,7 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
             "benefits": sections.get("benefits", ""),
             "what_it_is": sections.get("what_it_is", ""),
             "who_its_for": sections.get("who_its_for", ""),
+            "_page_reviews": page_reviews,
         }
 
         return product
@@ -1114,256 +1133,86 @@ def scrape_reviews(
                 seen_reviews.add(key)
                 all_reviews.append(r)
 
-    # Cool down after product scraping to let rate limits reset
-    _limiter.cooldown(20)
-
-    # Log product URLs so we can see if they're populated
-    urls_present = [p.get("url", "") for p in products if p.get("url")]
-    _dbg("Products passed to review scraper",
-         total=len(products),
-         with_urls=len(urls_present),
-         sample_urls=urls_present[:3])
-
     # ------------------------------------------------------------------
-    # Debug: Fetch one product page and dump the full HTML
+    # Method 1: Collect reviews already extracted during product scraping
+    # (zero extra HTTP requests — we already had the HTML)
     # ------------------------------------------------------------------
-    cached_html = {}  # url -> html, reused in Method 2
-    products_with_urls = [p for p in products if p.get("url")]
-    if products_with_urls:
-        sample = products_with_urls[0]
-        sample_url = sample["url"]
-        logger.info("Debug: fetching full HTML for %s", sample_url)
-        sample_html = _get_html(session, sample_url)
-        if sample_html:
-            cached_html[sample_url] = sample_html
-            _dbg(
-                f"Full product page HTML: {sample['title']}",
-                url=sample_url,
-                bytes=len(sample_html),
-                html=sample_html,
-            )
-        else:
-            _dbg("Failed to fetch sample product page", url=sample_url)
-        _limiter.wait()
-
-    # ------------------------------------------------------------------
-    # Method 1: Squarespace Review API
-    # ------------------------------------------------------------------
-    api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
-    api_reviews = []
-
-    def _try_review_api(url, path_label, headers=None):
-        """Hit a review API endpoint and return (review_list, resp_body_snippet).
-
-        Also appends to debug_log automatically.
-        """
-        hdrs = headers or api_headers
-        try:
-            resp = session.get(url, headers=hdrs, timeout=15)
-            body_snippet = resp.text[:2000]
-            _dbg(
-                f"API: {path_label}",
-                url=url,
-                status=resp.status_code,
-                bytes=len(resp.content),
-                body_snippet=body_snippet,
-            )
-            logger.info("Review API %s → %d (%d bytes)", path_label, resp.status_code, len(resp.content))
-
-            if resp.status_code == 429:
-                _limiter.on_rate_limit(float(resp.headers.get("Retry-After", 0)))
-                _limiter.wait()
-                return [], body_snippet
-            if resp.status_code != 200:
-                return [], body_snippet
-
-            try:
-                data = resp.json()
-            except ValueError:
-                return [], body_snippet
-
-            review_list = (
-                data if isinstance(data, list)
-                else data.get("reviews", data.get("items", []))
-            )
-            if not review_list and isinstance(data, dict):
-                keys = list(data.keys())
-                logger.info("  → 0 reviews; keys: %s", keys)
-                _dbg(f"API keys (0 reviews)", url=url, keys=keys)
-            else:
-                logger.info("  → %d review(s)", len(review_list))
-
-            return review_list, body_snippet
-
-        except Exception as exc:
-            _dbg(f"API error: {path_label}", url=url, error=str(exc))
-            logger.warning("Review API error %s: %s", path_label, exc)
-            return [], ""
-
-    # 1a. Store-wide endpoints
-    store_wide_paths = [
-        "/api/commerce/reviews/published",
-        "/api/commerce/reviews/published?page=0&size=100",
-        "/api/commerce/reviews?status=PUBLISHED",
-        "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
-        "/api/commerce/reviews?type=STORE&page=0&size=100",
-        "/api/commerce/reviews",
-    ]
-    for api_path in store_wide_paths:
-        review_list, _ = _try_review_api(
-            f"{base_url}{api_path}", f"[store-wide] {api_path}",
-        )
-        for r in review_list:
-            api_reviews.append(_normalise_review(r, "", ""))
-        if api_reviews:
-            break
-        _limiter.wait()
-
-    # 1b. Per-product endpoint (probe with first product)
-    if not api_reviews and products:
-        probe = products[0]
-        product_id = probe.get("id", "")
-        per_product_paths = [
-            f"/api/commerce/reviews/published?productId={product_id}",
-            f"/api/commerce/reviews?productId={product_id}&status=PUBLISHED",
-            f"/api/commerce/reviews?productId={product_id}",
-        ]
-        for api_path in per_product_paths:
-            review_list, _ = _try_review_api(
-                f"{base_url}{api_path}", f"[per-product] {api_path}",
-            )
-            if review_list:
-                for r in review_list:
-                    api_reviews.append(
-                        _normalise_review(r, probe["title"], probe["handle"])
-                    )
-                for product in products[1:]:
-                    pid = product.get("id", "")
-                    url = f"{base_url}{api_path.split('?')[0]}?productId={pid}"
-                    _limiter.wait()
-                    rl2, _ = _try_review_api(url, f"[per-product] {product['handle']}")
-                    for rv in rl2:
-                        api_reviews.append(
-                            _normalise_review(rv, product["title"], product["handle"])
-                        )
-                break
-            _limiter.wait()
-
-    if api_reviews:
-        for r in api_reviews:
-            handle = r.get("product_handle", "")
-            if handle and handle in handle_titles and not r.get("product_title"):
-                r["product_title"] = handle_titles[handle]
-        _add_reviews(api_reviews)
-        logger.info("Review API returned %d reviews total", len(api_reviews))
-        _dbg("Method 1 result", reviews_found=len(api_reviews))
-
-    # ------------------------------------------------------------------
-    # Method 2: HTML scrape — parse server-rendered reviews
-    # Always runs (store reviews are only in HTML, not the API).
-    # ------------------------------------------------------------------
-    api_count = len(all_reviews)
-    _dbg("Starting HTML scrape", note=f"API found {api_count} reviews, now checking HTML for more")
-    logger.info("Checking HTML for server-rendered reviews (API found %d)", api_count)
-    products_with_urls = [p for p in products if p.get("url")]
-    for probe_product in products_with_urls[:3]:
-        probe_url = probe_product["url"]
-        logger.info("Fetching reviews from product page: %s", probe_url)
-        # Reuse cached HTML from debug dump if available
-        html = cached_html.get(probe_url) or _get_html(session, probe_url)
-        if not html:
-            _dbg("HTML fetch failed", url=probe_url)
-            _limiter.wait()
-            continue
-
-        has_container = "reviewsContainer" in html or "reviewDetails" in html
-
-        # Extract the review section HTML for debug display
-        soup_dbg = BeautifulSoup(html, "html.parser")
-        review_section = soup_dbg.select_one(
-            ".reviewsSection, .reviewsContainer, "
-            "[data-controller='ProductReviewsController']"
-        )
-        review_html_snippet = ""
-        if review_section:
-            review_html_snippet = review_section.prettify()[:5000]
-
-        _dbg(
-            "HTML page fetched",
-            url=probe_url,
-            bytes=len(html),
-            has_review_container=has_container,
-            review_section_snippet=review_html_snippet or "(no review section found)",
-        )
-        logger.info(
-            "HTML page %s: %d bytes, review container: %s",
-            probe_url, len(html), has_container,
-        )
-
-        if not has_container:
-            _limiter.wait()
-            continue
-
-        reviews = _scrape_reviews_from_html(html, "", "")
-        if reviews:
-            for r in reviews:
+    for p in products:
+        page_reviews = p.pop("_page_reviews", [])
+        if page_reviews:
+            for r in page_reviews:
                 handle = r.get("product_handle", "")
                 if handle and handle in handle_titles:
                     r["product_title"] = handle_titles[handle]
-            _add_reviews(reviews)
-            _dbg("HTML reviews parsed", count=len(reviews))
-            logger.info("Found %d reviews from HTML on %s", len(reviews), probe_url)
-        else:
+            _add_reviews(page_reviews)
             _dbg(
-                "HTML container empty (JS-rendered)",
-                note="Container exists but 0 div.reviewDetails found by parser",
+                f"Reviews from product page: {p.get('title', '?')}",
+                count=len(page_reviews),
             )
-            logger.info("Review container found but 0 reviews parsed (JS-rendered)")
 
-        # Always try crumb API to get ALL reviews (HTML only has first page,
-        # "Show More" loads the rest via JS).
-        crumb = _extract_crumb(html)
-        _dbg("Crumb token search", found=bool(crumb), crumb=crumb[:20] + "..." if crumb else "")
-        if crumb:
-            crumb_headers = {
-                **api_headers,
-                "X-Requested-With": "XMLHttpRequest",
-            }
-            crumb_endpoints = [
-                "/api/commerce/reviews?type=STORE&page=0&size=100",
-                "/api/commerce/reviews/published?page=0&size=100",
-                "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
-            ]
-            for ep in crumb_endpoints:
-                sep = "&" if "?" in ep else "?"
-                crumb_url = f"{base_url}{ep}{sep}crumb={crumb}"
-                review_list, _ = _try_review_api(
-                    crumb_url, f"[crumb] {ep}", crumb_headers,
+    if all_reviews:
+        logger.info("Collected %d reviews from product page HTML (no extra requests)", len(all_reviews))
+    else:
+        _dbg("No reviews found on product pages", note="Products had no server-rendered reviews")
+        logger.info("No reviews found on product pages during product scraping")
+
+    # ------------------------------------------------------------------
+    # Method 2: If product pages had no reviews, try the API
+    # ------------------------------------------------------------------
+    if not all_reviews:
+        _limiter.cooldown(20)
+        api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
+
+        def _try_review_api(url, path_label, headers=None):
+            hdrs = headers or api_headers
+            try:
+                resp = session.get(url, headers=hdrs, timeout=15)
+                body_snippet = resp.text[:2000]
+                _dbg(f"API: {path_label}", url=url, status=resp.status_code,
+                     bytes=len(resp.content), body_snippet=body_snippet)
+                logger.info("Review API %s → %d (%d bytes)", path_label, resp.status_code, len(resp.content))
+                if resp.status_code == 429:
+                    _limiter.on_rate_limit(float(resp.headers.get("Retry-After", 0)))
+                    _limiter.wait()
+                    return [], body_snippet
+                if resp.status_code != 200:
+                    return [], body_snippet
+                try:
+                    data = resp.json()
+                except ValueError:
+                    return [], body_snippet
+                review_list = (
+                    data if isinstance(data, list)
+                    else data.get("reviews", data.get("items", []))
                 )
-                if review_list:
-                    for rv in review_list:
-                        normalised = _normalise_review(rv, "", "")
-                        # API reviews may include product info — extract it
-                        product_info = rv.get("product") or {}
-                        if product_info:
-                            api_handle = product_info.get("urlSlug", "") or product_info.get("slug", "")
-                            api_title = product_info.get("title", "")
-                            if api_handle:
-                                normalised["product_handle"] = api_handle
-                            if api_title:
-                                normalised["product_title"] = api_title
-                        handle = normalised.get("product_handle", "")
-                        if handle and handle in handle_titles and not normalised.get("product_title"):
-                            normalised["product_title"] = handle_titles[handle]
-                        _add_reviews([normalised])
-                    _dbg("Crumb API reviews", count=len(review_list))
-                    break
-                _limiter.wait()
+                logger.info("  → %d review(s)", len(review_list))
+                return review_list, body_snippet
+            except Exception as exc:
+                _dbg(f"API error: {path_label}", url=url, error=str(exc))
+                return [], ""
 
-        if all_reviews:
-            break
+        store_wide_paths = [
+            "/api/commerce/reviews?type=STORE&page=0&size=100",
+            "/api/commerce/reviews/published?page=0&size=100",
+            "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
+            "/api/commerce/reviews",
+        ]
+        for api_path in store_wide_paths:
+            review_list, _ = _try_review_api(
+                f"{base_url}{api_path}", f"[store-wide] {api_path}",
+            )
+            if review_list:
+                for r in review_list:
+                    _add_reviews([_normalise_review(r, "", "")])
+                _dbg("API reviews found", count=len(review_list))
+                break
+            _limiter.wait()
 
-        _limiter.wait()
+        # Enrich API reviews with product titles
+        for r in all_reviews:
+            handle = r.get("product_handle", "")
+            if handle and handle in handle_titles and not r.get("product_title"):
+                r["product_title"] = handle_titles[handle]
 
     # Sort reviews by product so they're grouped in the CSV
     all_reviews.sort(key=lambda r: (r.get("product_handle", ""), r.get("created_at", "")))
