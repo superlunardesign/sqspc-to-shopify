@@ -633,6 +633,15 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
 
         json_worked = True
 
+        # Extract the collection path from the JSON response — this gives
+        # us the correct base for product URLs (e.g. /shop-skincare)
+        collection_data = data.get("collection", {})
+        collection_url_path = collection_data.get("fullUrl", "") or shop_path
+        if page == 1:
+            item_keys = list(items[0].keys()) if items else []
+            logger.info("JSON API item keys: %s", item_keys)
+            logger.info("Collection fullUrl: %r", collection_data.get("fullUrl", ""))
+
         new_on_page = 0
         for item in items:
             item_id = item.get("id", "")
@@ -641,7 +650,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
             seen_ids.add(item_id)
             new_on_page += 1
 
-            product = _process_product(session, base_url, item, shop_path)
+            product = _process_product(session, base_url, item, collection_url_path)
             if product:
                 products.append(product)
                 logger.info("Scraped product: %s (url=%s)", product["title"], product.get("url", ""))
@@ -777,16 +786,18 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
         full_url = item.get("fullUrl", "")
         slug = item.get("urlId", "") or full_url.rstrip("/").split("/")[-1]
 
-        # fullUrl has the correct path (e.g. /shop-skincare/p/slug)
-        if full_url:
+        # Build the product page URL.
+        # fullUrl (when present) has the correct path (e.g. /shop-skincare/p/slug).
+        # When missing, construct it from the collection path + /p/ + slug.
+        if full_url and "/p/" in full_url:
             product_url = f"{base_url}{full_url}" if full_url.startswith("/") else f"{base_url}/{full_url}"
         elif slug:
-            # Construct URL from shop_path — e.g. /shop/p/slug
+            # shop_path is the collection URL (e.g. /shop-skincare)
             product_url = f"{base_url}{shop_path}/p/{slug}"
         else:
             product_url = ""
 
-        logger.info("Product URL for %r: %s (fullUrl=%r, slug=%r)", title, product_url, full_url, slug)
+        logger.info("Product URL for %r: %s (fullUrl=%r, slug=%r, shop_path=%r)", title, product_url, full_url, slug, shop_path)
 
         # ---- Body / description -------------------------------------------
         body_html = item.get("body", "") or ""
@@ -954,6 +965,9 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
             # price/SKU/availability) and to enrich body/images when
             # the JSON API returned limited data.
             html = _get_html(session, product_url)
+            logger.info("HTML fetch for %s: %s (%d bytes)",
+                        slug, "OK" if html else "FAILED",
+                        len(html) if html else 0)
             if html:
                 # --- JSON-LD: authoritative price, SKU, availability ---
                 ld = _extract_jsonld(html)
@@ -1036,14 +1050,25 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                 # (store reviews repeat on every product page).
                 global _found_page_reviews
                 if not _found_page_reviews:
-                    page_reviews = _scrape_reviews_from_html(
-                        html, title, slug,
+                    has_reviews_html = "reviewDetails" in html or "reviewsContainer" in html
+                    logger.info(
+                        "Product page %s: %d bytes, has review HTML: %s",
+                        slug, len(html), has_reviews_html,
                     )
-                    if page_reviews:
-                        _found_page_reviews = True
+                    if has_reviews_html:
+                        page_reviews = _scrape_reviews_from_html(
+                            html, title, slug,
+                        )
                         logger.info(
-                            "Found %d reviews on product page %s",
+                            "Parsed %d reviews from product page %s",
                             len(page_reviews), slug,
+                        )
+                        if page_reviews:
+                            _found_page_reviews = True
+                    else:
+                        logger.info(
+                            "No review HTML on page %s (first 500 chars): %s",
+                            slug, html[:500],
                         )
 
         # ---- Tags ---------------------------------------------------------
