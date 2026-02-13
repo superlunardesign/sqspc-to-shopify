@@ -640,7 +640,14 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
         if page == 1:
             item_keys = list(items[0].keys()) if items else []
             logger.info("JSON API item keys: %s", item_keys)
+            logger.info("Collection data keys: %s", list(collection_data.keys()))
             logger.info("Collection fullUrl: %r", collection_data.get("fullUrl", ""))
+            if items:
+                first = items[0]
+                logger.info("First item URL fields: fullUrl=%r, urlId=%r, url=%r",
+                            first.get("fullUrl", ""), first.get("urlId", ""),
+                            first.get("url", ""))
+            logger.info("Using collection_url_path=%r for product URLs", collection_url_path)
 
         new_on_page = 0
         for item in items:
