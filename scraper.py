@@ -639,10 +639,10 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
             seen_ids.add(item_id)
             new_on_page += 1
 
-            product = _process_product(session, base_url, item)
+            product = _process_product(session, base_url, item, shop_path)
             if product:
                 products.append(product)
-                logger.info("Scraped product: %s", product["title"])
+                logger.info("Scraped product: %s (url=%s)", product["title"], product.get("url", ""))
 
             _limiter.wait()
 
@@ -701,7 +701,7 @@ def scrape_products(base_url: str, shop_path: str = "/shop", max_products: int =
                         if item_id in seen_ids:
                             continue
                         seen_ids.add(item_id)
-                        product = _process_product(session, base_url, item)
+                        product = _process_product(session, base_url, item, cat_path)
                         if product:
                             products.append(product)
                             logger.info("Scraped product (category %s): %s", cat_path, product["title"])
@@ -766,7 +766,7 @@ def _normalise_price(raw_price: str, currency: str = "") -> str:
         return raw_price
 
 
-def _process_product(session: requests.Session, base_url: str, item: dict) -> dict | None:
+def _process_product(session: requests.Session, base_url: str, item: dict, shop_path: str = "/shop") -> dict | None:
     """Build a normalised product dict from a Squarespace item."""
     try:
         raw_title = item.get("title", "")
@@ -779,9 +779,12 @@ def _process_product(session: requests.Session, base_url: str, item: dict) -> di
         if full_url:
             product_url = f"{base_url}{full_url}" if full_url.startswith("/") else f"{base_url}/{full_url}"
         elif slug:
-            product_url = f"{base_url}/{slug}"
+            # Construct URL from shop_path — e.g. /shop/p/slug
+            product_url = f"{base_url}{shop_path}/p/{slug}"
         else:
             product_url = ""
+
+        logger.info("Product URL for %r: %s (fullUrl=%r, slug=%r)", title, product_url, full_url, slug)
 
         # ---- Body / description -------------------------------------------
         body_html = item.get("body", "") or ""
@@ -1113,6 +1116,13 @@ def scrape_reviews(
 
     # Cool down after product scraping to let rate limits reset
     _limiter.cooldown(20)
+
+    # Log product URLs so we can see if they're populated
+    urls_present = [p.get("url", "") for p in products if p.get("url")]
+    _dbg("Products passed to review scraper",
+         total=len(products),
+         with_urls=len(urls_present),
+         sample_urls=urls_present[:3])
 
     # ------------------------------------------------------------------
     # Debug: Fetch one product page and dump the full HTML
