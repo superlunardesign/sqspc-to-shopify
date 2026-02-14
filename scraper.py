@@ -1293,7 +1293,7 @@ def _extract_reviews_from_page(html: str, product_title: str, product_handle: st
         if not text or len(text) < 100:
             continue
         # Log a preview of any script that mentions "review"
-        if re.search(r"review", text, re.I):
+        if re.search(r"\breview", text, re.I):
             preview = re.sub(r"\s+", " ", text[:300]).strip()
             logger.info("Script tag with 'review' (%d chars): %s...", len(text), preview)
 
