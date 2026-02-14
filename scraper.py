@@ -1052,47 +1052,20 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                         if not sections[key] and enriched.get(key):
                             sections[key] = enriched[key]
 
-                # --- Grab any reviews rendered on this product page ---
-                # Only parse reviews from the first page that has them
-                # (store reviews repeat on every product page).
+                # --- Grab reviews from this product page ---
+                # Squarespace renders review containers empty and fills
+                # them via JS. But the data is often embedded in <script>
+                # tags as JSON. Try multiple extraction strategies.
                 global _found_page_reviews
                 if not _found_page_reviews:
-                    has_reviews_html = "reviewDetails" in html or "reviewsContainer" in html
-                    logger.info(
-                        "Product page %s: %d bytes, has review HTML: %s",
-                        slug, len(html), has_reviews_html,
+                    page_reviews = _extract_reviews_from_page(
+                        html, title, slug,
                     )
-                    if has_reviews_html:
-                        # Debug: check what the review section actually contains
-                        dbg_soup = BeautifulSoup(html, "html.parser")
-                        review_container = dbg_soup.select_one(
-                            ".reviewsContainer, .reviewsSection, "
-                            "[data-controller='ProductReviewsController']"
-                        )
-                        if review_container:
-                            container_text = review_container.get_text(strip=True)[:200]
-                            review_blocks = review_container.select("div.reviewDetails")
-                            logger.info(
-                                "Review container found: %d div.reviewDetails, "
-                                "text preview: %r",
-                                len(review_blocks), container_text,
-                            )
-                        else:
-                            logger.info("No review container element found (string match was in JS/CSS)")
-
-                        page_reviews = _scrape_reviews_from_html(
-                            html, title, slug,
-                        )
+                    if page_reviews:
+                        _found_page_reviews = True
                         logger.info(
-                            "Parsed %d reviews from product page %s",
+                            "Found %d reviews on product page %s",
                             len(page_reviews), slug,
-                        )
-                        if page_reviews:
-                            _found_page_reviews = True
-                    else:
-                        logger.info(
-                            "No review HTML on page %s (first 500 chars): %s",
-                            slug, html[:500],
                         )
 
         # ---- Tags ---------------------------------------------------------
@@ -1288,6 +1261,214 @@ def _normalise_review(review_data: dict, product_title: str, product_handle: str
         or review_data.get("createdOn", "")
         or review_data.get("date", ""),
     }
+
+
+def _extract_reviews_from_page(html: str, product_title: str, product_handle: str) -> list[dict]:
+    """Extract reviews from a product page using every available strategy.
+
+    Squarespace renders review containers empty and fills them via
+    JavaScript (ProductReviewsController). The actual review data is
+    often embedded in the page as JSON inside <script> tags. We try:
+
+    1. Rendered HTML (div.reviewDetails) — works if server-rendered
+    2. Embedded JSON in <script> tags — the JS controller's data source
+    3. Static.SQUARESPACE_CONTEXT or similar config objects
+    """
+    # Strategy 1: server-rendered reviews (rare but check first)
+    reviews = _scrape_reviews_from_html(html, product_title, product_handle)
+    if reviews:
+        logger.info("Strategy 1 (rendered HTML): %d reviews", len(reviews))
+        return reviews
+
+    # Strategy 2: find review data in <script> tags
+    soup = BeautifulSoup(html, "html.parser")
+    reviews = _extract_reviews_from_scripts(soup, product_title, product_handle)
+    if reviews:
+        logger.info("Strategy 2 (script JSON): %d reviews", len(reviews))
+        return reviews
+
+    # Strategy 3: log what script content IS on the page for debugging
+    for script in soup.find_all("script"):
+        text = script.string or ""
+        if not text or len(text) < 100:
+            continue
+        # Log a preview of any script that mentions "review"
+        if re.search(r"review", text, re.I):
+            preview = re.sub(r"\s+", " ", text[:300]).strip()
+            logger.info("Script tag with 'review' (%d chars): %s...", len(text), preview)
+
+    logger.info("No reviews found via any strategy on page %s", product_handle)
+    return []
+
+
+def _extract_reviews_from_scripts(
+    soup: BeautifulSoup, product_title: str, product_handle: str,
+) -> list[dict]:
+    """Search <script> tags for embedded review JSON data."""
+    reviews = []
+
+    for script in soup.find_all("script"):
+        text = script.string or ""
+        if not text or len(text) < 50:
+            continue
+
+        # Look for JSON objects/arrays containing review-like data
+        # Squarespace embeds data in various ways:
+        #   - Static.SQUARESPACE_CONTEXT = {...}
+        #   - window.__INITIAL_STATE__ = {...}
+        #   - Inline JSON with "reviews" key
+        #   - ProductReviewsController config
+
+        # Try to find JSON blobs with review data
+        for pattern in [
+            # {"reviews": [...]}  or  {"items": [..., {review}]}
+            r'"reviews"\s*:\s*\[',
+            r'"reviewItems"\s*:\s*\[',
+            r'"storeReviews"\s*:\s*\[',
+            # ProductReviewsController data
+            r'"reviewDetails"',
+            r'"authorName"',
+            r'"reviewBody"',
+        ]:
+            if not re.search(pattern, text):
+                continue
+
+            logger.info("Found review-like data in script tag (pattern: %s, length: %d)",
+                        pattern, len(text))
+
+            # Try to extract the whole JSON object
+            extracted = _try_parse_json_from_script(text)
+            if extracted:
+                found = _walk_json_for_reviews(extracted, product_title, product_handle)
+                if found:
+                    reviews.extend(found)
+                    return reviews
+
+            # Try to extract just the array after "reviews":
+            for key in ["reviews", "reviewItems", "storeReviews", "items"]:
+                array_match = re.search(
+                    rf'"{key}"\s*:\s*(\[[\s\S]*?\])\s*[,}}]', text,
+                )
+                if array_match:
+                    try:
+                        arr = json.loads(array_match.group(1))
+                        if isinstance(arr, list) and arr:
+                            found = _normalise_review_list(arr, product_title, product_handle)
+                            if found:
+                                reviews.extend(found)
+                                return reviews
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+    return reviews
+
+
+def _try_parse_json_from_script(text: str) -> dict | list | None:
+    """Try to extract a JSON object or array from a script tag's text."""
+    # Try direct parse (pure JSON script tags)
+    text = text.strip()
+    if text.startswith("{") or text.startswith("["):
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Try to find JSON after common assignment patterns
+    for prefix_pattern in [
+        r'(?:window\.)?\w+\s*=\s*',           # var = {...}
+        r'Static\.SQUARESPACE_CONTEXT\s*=\s*',  # Squarespace context
+        r'__INITIAL_STATE__\s*=\s*',             # React pattern
+    ]:
+        match = re.search(prefix_pattern + r'(\{[\s\S]+\})\s*;?\s*$', text)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+    return None
+
+
+def _walk_json_for_reviews(
+    data, product_title: str, product_handle: str, depth: int = 0,
+) -> list[dict]:
+    """Recursively walk a JSON structure looking for review arrays."""
+    if depth > 8:
+        return []
+
+    if isinstance(data, list):
+        # Check if this looks like a list of reviews
+        reviews = _normalise_review_list(data, product_title, product_handle)
+        if reviews:
+            return reviews
+
+    if isinstance(data, dict):
+        # Check known keys first
+        for key in ["reviews", "reviewItems", "storeReviews", "items"]:
+            if key in data and isinstance(data[key], list):
+                reviews = _normalise_review_list(data[key], product_title, product_handle)
+                if reviews:
+                    return reviews
+
+        # Recurse into values
+        for val in data.values():
+            if isinstance(val, (dict, list)):
+                reviews = _walk_json_for_reviews(val, product_title, product_handle, depth + 1)
+                if reviews:
+                    return reviews
+
+    return []
+
+
+def _normalise_review_list(
+    items: list, product_title: str, product_handle: str,
+) -> list[dict]:
+    """Try to normalise a list of dicts as reviews. Returns [] if they
+    don't look like reviews."""
+    reviews = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        # Must have at least a body/content or rating to count as a review
+        body = (item.get("body") or item.get("content") or
+                item.get("reviewBody") or item.get("comment") or "")
+        rating = (item.get("rating") or item.get("value") or
+                  item.get("starRating") or "")
+        if not body and not rating:
+            continue
+
+        author = (item.get("authorName") or item.get("reviewer") or
+                  item.get("author", ""))
+        if isinstance(author, dict):
+            author = author.get("displayName", "") or author.get("name", "")
+
+        # Extract product info if available
+        handle = product_handle
+        title = product_title
+        product_info = item.get("product") or {}
+        if isinstance(product_info, dict):
+            handle = (product_info.get("urlSlug") or
+                      product_info.get("slug") or
+                      product_info.get("handle") or handle)
+            title = product_info.get("title") or title
+
+        # Handle product URL in the review
+        product_url = item.get("productUrl") or ""
+        if product_url and not handle:
+            handle = product_url.rstrip("/").split("/")[-1]
+
+        reviews.append({
+            "product_title": title,
+            "product_handle": handle,
+            "rating": str(rating) if rating else "",
+            "author": str(author),
+            "email": item.get("authorEmail") or item.get("email") or "",
+            "title": item.get("title") or "",
+            "body": str(body),
+            "created_at": (item.get("addedOn") or item.get("createdOn") or
+                           item.get("date") or ""),
+        })
+    return reviews
 
 
 def _scrape_reviews_from_html(html: str, product_title: str, product_handle: str) -> list[dict]:
