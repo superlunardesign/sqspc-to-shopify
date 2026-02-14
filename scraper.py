@@ -1106,6 +1106,76 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
         return None
 
 
+def _scrape_reviews_with_browser(
+    products: list[dict],
+    base_url: str,
+) -> tuple[list[dict], list[dict]]:
+    """Visit product pages with a headless browser to extract JS-rendered reviews."""
+    reviews: list[dict] = []
+    debug_log: list[dict] = []
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.error("Playwright is not installed — cannot render JS for reviews")
+        debug_log.append({"label": "Playwright not installed", "error": "pip install playwright"})
+        return reviews, debug_log
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(user_agent=DEFAULT_HEADERS["User-Agent"])
+
+            for product in products:
+                url = product.get("url", "")
+                title = product.get("title", "")
+                handle = product.get("handle", "")
+                if not url:
+                    continue
+
+                logger.info("Playwright: visiting %s for reviews", url)
+                try:
+                    page.goto(url, wait_until="networkidle", timeout=30_000)
+                    # Extra wait for lazy-loaded review widgets
+                    page.wait_for_timeout(3000)
+
+                    html = page.content()
+                    logger.info(
+                        "Playwright: got %d bytes of rendered HTML for %s",
+                        len(html), handle,
+                    )
+
+                    page_reviews = _extract_reviews_from_page(html, title, handle)
+                    if page_reviews:
+                        reviews.extend(page_reviews)
+                        logger.info("Playwright: found %d reviews on %s", len(page_reviews), handle)
+                        debug_log.append({
+                            "label": f"Browser reviews: {title}",
+                            "count": len(page_reviews),
+                        })
+                    else:
+                        logger.info("Playwright: no reviews found on %s", handle)
+                        debug_log.append({
+                            "label": f"Browser: no reviews on {title}",
+                            "note": "Page rendered but no review elements found",
+                        })
+                except Exception as exc:
+                    logger.warning("Playwright: error on %s: %s", url, exc)
+                    debug_log.append({
+                        "label": f"Browser error: {title}",
+                        "error": str(exc),
+                    })
+
+                _limiter.wait()
+
+            browser.close()
+    except Exception as exc:
+        logger.error("Playwright browser launch failed: %s", exc)
+        debug_log.append({"label": "Browser launch failed", "error": str(exc)})
+
+    return reviews, debug_log
+
+
 def scrape_reviews(
     base_url: str,
     products: list[dict],
@@ -1114,10 +1184,9 @@ def scrape_reviews(
     """Scrape product reviews from a Squarespace store.
 
     Strategies (tried in order):
-    1. Squarespace review API — query the commerce reviews endpoint
-       using the same session (with cookies) from product scraping.
-    2. HTML fallback — parse any server-rendered reviews from a product
-       page.
+    1. Static HTML — reviews already extracted during product scraping.
+    2. Headless browser — render JS on each product page and extract
+       reviews from the fully-rendered DOM.
 
     Parameters
     ----------
@@ -1179,62 +1248,16 @@ def scrape_reviews(
         logger.info("No reviews found on product pages during product scraping")
 
     # ------------------------------------------------------------------
-    # Method 2: If product pages had no reviews, try the API
+    # Method 2: If static HTML had no reviews, use a headless browser
+    # to render JS and extract reviews from the fully-rendered page.
     # ------------------------------------------------------------------
     if not all_reviews:
         _limiter.cooldown(20)
-        api_headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
-
-        def _try_review_api(url, path_label, headers=None):
-            hdrs = headers or api_headers
-            try:
-                resp = session.get(url, headers=hdrs, timeout=15)
-                body_snippet = resp.text[:2000]
-                _dbg(f"API: {path_label}", url=url, status=resp.status_code,
-                     bytes=len(resp.content), body_snippet=body_snippet)
-                logger.info("Review API %s → %d (%d bytes)", path_label, resp.status_code, len(resp.content))
-                if resp.status_code == 429:
-                    _limiter.on_rate_limit(float(resp.headers.get("Retry-After", 0)))
-                    _limiter.wait()
-                    return [], body_snippet
-                if resp.status_code != 200:
-                    return [], body_snippet
-                try:
-                    data = resp.json()
-                except ValueError:
-                    return [], body_snippet
-                review_list = (
-                    data if isinstance(data, list)
-                    else data.get("reviews", data.get("items", []))
-                )
-                logger.info("  → %d review(s)", len(review_list))
-                return review_list, body_snippet
-            except Exception as exc:
-                _dbg(f"API error: {path_label}", url=url, error=str(exc))
-                return [], ""
-
-        store_wide_paths = [
-            "/api/commerce/reviews?type=STORE&page=0&size=100",
-            "/api/commerce/reviews/published?page=0&size=100",
-            "/api/commerce/reviews?status=PUBLISHED&page=0&size=100",
-            "/api/commerce/reviews",
-        ]
-        for api_path in store_wide_paths:
-            review_list, _ = _try_review_api(
-                f"{base_url}{api_path}", f"[store-wide] {api_path}",
-            )
-            if review_list:
-                for r in review_list:
-                    _add_reviews([_normalise_review(r, "", "")])
-                _dbg("API reviews found", count=len(review_list))
-                break
-            _limiter.wait()
-
-        # Enrich API reviews with product titles
-        for r in all_reviews:
-            handle = r.get("product_handle", "")
-            if handle and handle in handle_titles and not r.get("product_title"):
-                r["product_title"] = handle_titles[handle]
+        browser_reviews, browser_debug = _scrape_reviews_with_browser(
+            products, base_url,
+        )
+        debug_log.extend(browser_debug)
+        _add_reviews(browser_reviews)
 
     # Sort reviews by product so they're grouped in the CSV
     all_reviews.sort(key=lambda r: (r.get("product_handle", ""), r.get("created_at", "")))
