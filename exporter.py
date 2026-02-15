@@ -236,15 +236,27 @@ def export_reviews_csv(reviews: list[dict], dest: IO[str] | None = None) -> str:
     writer.writeheader()
 
     for review in reviews:
+        # Normalise rating to integer 1-5
+        raw_rating = review.get("rating", "")
+        try:
+            rating = str(round(float(raw_rating))) if raw_rating else ""
+        except (ValueError, TypeError):
+            rating = str(raw_rating) if raw_rating else ""
+
+        # Skip reviews with no body (Judge.me requires body text)
+        body = (review.get("body") or "").strip()
+        if not body:
+            continue
+
         writer.writerow(
             {
                 "product_handle": review.get("product_handle", ""),
                 "state": "published",
-                "rating": review.get("rating", ""),
+                "rating": rating,
                 "title": review.get("title", ""),
-                "author": review.get("author", ""),
+                "author": review.get("author", "") or "Anonymous",
                 "email": review.get("email", ""),
-                "body": review.get("body", ""),
+                "body": body,
                 "created_at": review.get("created_at", ""),
             }
         )

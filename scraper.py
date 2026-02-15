@@ -331,6 +331,56 @@ def _extract_crumb(html: str) -> str:
     return ""
 
 
+def _format_review_date(date_val) -> str:
+    """Convert a Squarespace review date to Judge.me format.
+
+    The API returns ``reviewDate`` as epoch milliseconds (e.g. 1734278400000)
+    or an ISO string.  Judge.me expects ``YYYY-MM-DD HH:mm:ss UTC``.
+    """
+    if not date_val:
+        return ""
+    from datetime import datetime, timezone
+
+    # Epoch milliseconds (large integer or numeric string)
+    try:
+        ts = float(date_val)
+        if ts > 1e12:  # milliseconds
+            ts /= 1000
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (ValueError, TypeError, OSError):
+        pass
+
+    # ISO string or human-readable
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+        "%b %d, %Y",  # "Dec 15, 2025"
+    ]:
+        try:
+            dt = datetime.strptime(str(date_val), fmt)
+            return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+        except ValueError:
+            continue
+
+    return str(date_val)
+
+
+def _normalise_rating(val) -> str:
+    """Ensure rating is an integer 1-5 as a string."""
+    if not val and val != 0:
+        return ""
+    try:
+        n = float(val)
+        if n < 1 or n > 5:
+            return str(val)
+        return str(round(n))
+    except (ValueError, TypeError):
+        return str(val)
+
+
 def _extract_website_id(html: str) -> str:
     """Extract the Squarespace websiteId from page HTML.
 
@@ -403,12 +453,12 @@ def _fetch_reviews_via_api(
                 reviews.append({
                     "product_title": product_title,
                     "product_handle": product_handle,
-                    "rating": str(r.get("starRating", "")),
+                    "rating": _normalise_rating(r.get("starRating")),
                     "author": author,
                     "email": "",
-                    "title": "",
+                    "title": "",  # Squarespace reviews have no title/headline
                     "body": r.get("text", ""),
-                    "created_at": r.get("reviewDate", ""),
+                    "created_at": _format_review_date(r.get("reviewDate")),
                 })
 
             if len(batch) < page_size:
@@ -493,12 +543,12 @@ def _fetch_store_reviews_via_api(
                 reviews.append({
                     "product_title": matched_title,
                     "product_handle": matched_handle,
-                    "rating": str(r.get("starRating", "")),
+                    "rating": _normalise_rating(r.get("starRating")),
                     "author": author,
                     "email": "",
                     "title": "",
                     "body": r.get("text", ""),
-                    "created_at": r.get("reviewDate", ""),
+                    "created_at": _format_review_date(r.get("reviewDate")),
                 })
 
             if len(batch) < page_size:

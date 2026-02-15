@@ -208,6 +208,33 @@
     return "";
   }
 
+  function formatReviewDate(dateVal) {
+    if (!dateVal) return "";
+    try {
+      const d = new Date(dateVal);
+      if (isNaN(d.getTime())) return String(dateVal);
+      // Judge.me accepts YYYY-MM-DD HH:mm:ss UTC
+      const pad = (n) => String(n).padStart(2, "0");
+      return (
+        d.getUTCFullYear() + "-" +
+        pad(d.getUTCMonth() + 1) + "-" +
+        pad(d.getUTCDate()) + " " +
+        pad(d.getUTCHours()) + ":" +
+        pad(d.getUTCMinutes()) + ":" +
+        pad(d.getUTCSeconds()) + " UTC"
+      );
+    } catch {
+      return String(dateVal);
+    }
+  }
+
+  function normaliseRating(val) {
+    if (!val && val !== 0) return "";
+    const n = Number(val);
+    if (isNaN(n) || n < 1 || n > 5) return String(val);
+    return String(Math.round(n));
+  }
+
   async function fetchReviewsViaAPI(websiteId, productId, crumb) {
     const reviews = [];
     if (!websiteId || !productId) return reviews;
@@ -244,9 +271,9 @@
           reviews.push({
             author: author.trim(),
             body: r.text || "",
-            rating: String(r.starRating || ""),
-            title: r.productName || "",
-            date: r.reviewDate || "",
+            rating: normaliseRating(r.starRating),
+            title: "",  // Squarespace reviews have no title/headline
+            created_at: formatReviewDate(r.reviewDate),
             email: "",
             product_name: r.productName || "",
             product_url: r.productURL || "",
@@ -301,9 +328,9 @@
           reviews.push({
             author: author.trim(),
             body: r.text || "",
-            rating: String(r.starRating || ""),
-            title: r.productName || "",
-            date: r.reviewDate || "",
+            rating: normaliseRating(r.starRating),
+            title: "",  // Squarespace reviews have no title/headline
+            created_at: formatReviewDate(r.reviewDate),
             email: "",
             product_name: r.productName || "",
             product_url: r.productURL || "",
