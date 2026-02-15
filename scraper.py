@@ -331,6 +331,185 @@ def _extract_crumb(html: str) -> str:
     return ""
 
 
+def _extract_website_id(html: str) -> str:
+    """Extract the Squarespace websiteId from page HTML.
+
+    The websiteId is needed for the ``/api/commerce/product/reviews`` API.
+    It appears in the Squarespace context JSON, controller data attributes,
+    or inline scripts.
+    """
+    # "websiteId":"<uuid>"
+    m = re.search(r'"websiteId"\s*:\s*"([a-f0-9-]+)"', html)
+    if m:
+        return m.group(1)
+    # data-website-id="<uuid>"
+    m = re.search(r'data-website-id=["\']([a-f0-9-]+)', html)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _fetch_reviews_via_api(
+    session: requests.Session,
+    base_url: str,
+    website_id: str,
+    crumb: str,
+    product_id: str,
+    product_title: str,
+    product_handle: str,
+) -> list[dict]:
+    """Fetch reviews for a product using the internal Squarespace reviews API.
+
+    Endpoint: /api/commerce/product/reviews?websiteId=X&productId=Y&page=N&size=50
+
+    This is the same API that Squarespace's ProductReviewsController calls
+    client-side.  It returns JSON with ``{productReviews: [...]}``.
+    """
+    reviews: list[dict] = []
+    page_size = 50
+    max_pages = 20
+    headers = {
+        "Content-Type": "application/json; charset=UTF-8",
+        "Accept": "application/json",
+    }
+    if crumb:
+        headers["X-CSRF-Token"] = crumb
+
+    for page_num in range(max_pages):
+        url = (
+            f"{base_url}/api/commerce/product/reviews"
+            f"?websiteId={website_id}"
+            f"&productId={product_id}"
+            f"&page={page_num}"
+            f"&size={page_size}"
+        )
+        try:
+            resp = session.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                logger.debug("Reviews API returned %d for product %s", resp.status_code, product_id)
+                break
+            data = resp.json()
+            batch = data.get("productReviews", [])
+            if not batch:
+                break
+
+            for r in batch:
+                first_name = r.get("userFirstName", "")
+                last_initial = (r.get("userLastName") or "")[:1]
+                author = (first_name + (" " + last_initial if last_initial else "")).strip()
+                if not author:
+                    author = r.get("userLoginName", "")
+
+                reviews.append({
+                    "product_title": product_title,
+                    "product_handle": product_handle,
+                    "rating": str(r.get("starRating", "")),
+                    "author": author,
+                    "email": "",
+                    "title": "",
+                    "body": r.get("text", ""),
+                    "created_at": r.get("reviewDate", ""),
+                })
+
+            if len(batch) < page_size:
+                break
+        except Exception as exc:
+            logger.debug("Reviews API error for product %s page %d: %s", product_id, page_num, exc)
+            break
+
+    return reviews
+
+
+def _fetch_store_reviews_via_api(
+    session: requests.Session,
+    base_url: str,
+    website_id: str,
+    crumb: str,
+    products: list[dict],
+) -> list[dict]:
+    """Fetch all store reviews (not product-specific) via the internal API.
+
+    Endpoint: /api/commerce/product/reviews?websiteId=X&page=N&size=50
+    (no productId = all store reviews)
+    """
+    reviews: list[dict] = []
+    page_size = 50
+    max_pages = 20
+    headers = {
+        "Content-Type": "application/json; charset=UTF-8",
+        "Accept": "application/json",
+    }
+    if crumb:
+        headers["X-CSRF-Token"] = crumb
+
+    # Build a lookup for matching reviews to products
+    handle_by_url = {}
+    title_by_handle = {}
+    for p in products:
+        h = p.get("handle", "")
+        t = p.get("title", "")
+        u = p.get("url", "")
+        if h:
+            title_by_handle[h] = t
+        if u and h:
+            handle_by_url[u] = h
+
+    for page_num in range(max_pages):
+        url = (
+            f"{base_url}/api/commerce/product/reviews"
+            f"?websiteId={website_id}"
+            f"&page={page_num}"
+            f"&size={page_size}"
+        )
+        try:
+            resp = session.get(url, headers=headers, timeout=15)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            batch = data.get("productReviews", [])
+            if not batch:
+                break
+
+            for r in batch:
+                first_name = r.get("userFirstName", "")
+                last_initial = (r.get("userLastName") or "")[:1]
+                author = (first_name + (" " + last_initial if last_initial else "")).strip()
+                if not author:
+                    author = r.get("userLoginName", "")
+
+                # Try to match to a product
+                product_url = r.get("productURL", "")
+                matched_handle = ""
+                matched_title = r.get("productName", "")
+                for h, t in title_by_handle.items():
+                    if product_url and h in product_url:
+                        matched_handle = h
+                        matched_title = t
+                        break
+                    if matched_title and t.lower() == matched_title.lower():
+                        matched_handle = h
+                        break
+
+                reviews.append({
+                    "product_title": matched_title,
+                    "product_handle": matched_handle,
+                    "rating": str(r.get("starRating", "")),
+                    "author": author,
+                    "email": "",
+                    "title": "",
+                    "body": r.get("text", ""),
+                    "created_at": r.get("reviewDate", ""),
+                })
+
+            if len(batch) < page_size:
+                break
+        except Exception as exc:
+            logger.debug("Store reviews API error page %d: %s", page_num, exc)
+            break
+
+    return reviews
+
+
 def _extract_jsonld(html: str) -> dict:
     """Extract Product JSON-LD data from a product page.
 
@@ -1225,31 +1404,93 @@ def scrape_reviews(
                 all_reviews.append(r)
 
     # ------------------------------------------------------------------
-    # Method 1: Collect reviews already extracted during product scraping
+    # Method 1: Call /api/commerce/product/reviews directly
+    # This is the same API that Squarespace's ProductReviewsController
+    # calls client-side.  No browser needed — just requires websiteId
+    # and crumb token from the page HTML.
+    # ------------------------------------------------------------------
+    # Get websiteId and crumb from any product page (or the shop page)
+    website_id = ""
+    crumb = ""
+    sample_url = f"{base_url}/shop"
+    if products and products[0].get("url"):
+        sample_url = products[0]["url"]
+    try:
+        resp = session.get(sample_url, timeout=15)
+        if resp.ok:
+            website_id = _extract_website_id(resp.text)
+            crumb = _extract_crumb(resp.text)
+            # Also check cookie jar for crumb
+            if not crumb:
+                crumb = session.cookies.get("crumb", "")
+    except Exception as exc:
+        logger.debug("Could not fetch page for websiteId/crumb: %s", exc)
+
+    if website_id:
+        logger.info("Reviews API: websiteId=%s, crumb=%s", website_id, "present" if crumb else "missing")
+        _dbg("Reviews API", websiteId=website_id, crumb="present" if crumb else "missing")
+
+        # Try per-product reviews first
+        for p in products:
+            pid = p.get("id", "")
+            if not pid:
+                continue
+            api_reviews = _fetch_reviews_via_api(
+                session, base_url, website_id, crumb,
+                pid, p.get("title", ""), p.get("handle", ""),
+            )
+            if api_reviews:
+                _add_reviews(api_reviews)
+                _dbg(f"API reviews: {p.get('title', '?')}", count=len(api_reviews))
+            _limiter.wait()
+
+        # If no per-product reviews, try store-wide reviews
+        if not all_reviews:
+            logger.info("No per-product reviews via API, trying store-wide reviews...")
+            store_reviews = _fetch_store_reviews_via_api(
+                session, base_url, website_id, crumb, products,
+            )
+            if store_reviews:
+                _add_reviews(store_reviews)
+                _dbg("Store reviews via API", count=len(store_reviews))
+
+        if all_reviews:
+            logger.info("Reviews API: collected %d reviews total", len(all_reviews))
+    else:
+        logger.info("Could not find websiteId — skipping reviews API")
+        _dbg("Reviews API skipped", note="websiteId not found")
+
+    # ------------------------------------------------------------------
+    # Method 2: Collect reviews already extracted during product scraping
     # (zero extra HTTP requests — we already had the HTML)
     # ------------------------------------------------------------------
-    for p in products:
-        page_reviews = p.pop("_page_reviews", [])
-        if page_reviews:
-            for r in page_reviews:
-                handle = r.get("product_handle", "")
-                if handle and handle in handle_titles:
-                    r["product_title"] = handle_titles[handle]
-            _add_reviews(page_reviews)
-            _dbg(
-                f"Reviews from product page: {p.get('title', '?')}",
-                count=len(page_reviews),
-            )
+    if not all_reviews:
+        for p in products:
+            page_reviews = p.pop("_page_reviews", [])
+            if page_reviews:
+                for r in page_reviews:
+                    handle = r.get("product_handle", "")
+                    if handle and handle in handle_titles:
+                        r["product_title"] = handle_titles[handle]
+                _add_reviews(page_reviews)
+                _dbg(
+                    f"Reviews from product page: {p.get('title', '?')}",
+                    count=len(page_reviews),
+                )
 
-    if all_reviews:
-        logger.info("Collected %d reviews from product page HTML (no extra requests)", len(all_reviews))
+        if all_reviews:
+            logger.info("Collected %d reviews from product page HTML", len(all_reviews))
+        else:
+            _dbg("No reviews found on product pages", note="Products had no server-rendered reviews")
+            logger.info("No reviews found on product pages during product scraping")
     else:
-        _dbg("No reviews found on product pages", note="Products had no server-rendered reviews")
-        logger.info("No reviews found on product pages during product scraping")
+        # Still pop _page_reviews to avoid leftover data
+        for p in products:
+            p.pop("_page_reviews", None)
 
     # ------------------------------------------------------------------
-    # Method 2: If static HTML had no reviews, use a headless browser
-    # to render JS and extract reviews from the fully-rendered page.
+    # Method 3: If API and static HTML had no reviews, use a headless
+    # browser to render JS and extract reviews.
     # ------------------------------------------------------------------
     if not all_reviews:
         _limiter.cooldown(20)

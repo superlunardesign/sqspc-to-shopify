@@ -162,89 +162,163 @@
     return sections;
   }
 
-  // ── Extract reviews from a product page ─────────────────────────
+  // ── Extract reviews via Squarespace internal API ────────────────
+  //
+  // Squarespace loads reviews client-side via ProductReviewsController
+  // which calls /api/commerce/product/reviews.  We call the same API
+  // directly — no DOM scraping needed.
+  //
+  // Required:  websiteId  (from Static.SQUARESPACE_CONTEXT or page HTML)
+  //            productId  (from the JSON API product data)
+  //            crumb      (CSRF token from cookie)
+  // ─────────────────────────────────────────────────────────────────
 
-  async function extractReviewsFromPage(productUrl) {
-    const reviews = [];
+  function getCrumb() {
+    const match = document.cookie.match(/(?:^|;\s*)crumb=([^;]*)/);
+    return match ? decodeURIComponent(match[1]) : "";
+  }
+
+  function getWebsiteId() {
+    // Method 1: Static.SQUARESPACE_CONTEXT (most common)
     try {
-      const resp = await fetch(productUrl, { credentials: "same-origin" });
-      const html = await resp.text();
-      const doc = new DOMParser().parseFromString(html, "text/html");
-
-      // Strategy 1: Squarespace native review elements
-      const reviewEls = doc.querySelectorAll(
-        '.review-item, [data-testid="review-item"], .sqs-review'
-      );
-      for (const el of reviewEls) {
-        const author =
-          el.querySelector('[data-testid="reviewer-name"], .review-author')
-            ?.textContent?.trim() || "";
-        const body =
-          el.querySelector('[data-testid="review-desc"], .review-body, .review-content')
-            ?.textContent?.trim() || "";
-        const date =
-          el.querySelector('[data-testid="review-date"], .review-date')
-            ?.textContent?.trim() || "";
-        const starsEl = el.querySelector(
-          '[data-testid="review-stars"], .review-stars, .star-rating'
-        );
-        let rating = "";
-        if (starsEl) {
-          const filled = starsEl.querySelectorAll(
-            ".filled, .star--filled, [data-active]"
-          );
-          if (filled.length > 0) rating = String(filled.length);
-          else {
-            const ariaLabel = starsEl.getAttribute("aria-label") || "";
-            const m = ariaLabel.match(/(\d+(\.\d+)?)/);
-            if (m) rating = m[1];
-          }
-        }
-        if (author || body) {
-          reviews.push({ author, body, rating, title: "", date, email: "" });
-        }
+      if (window.Static && window.Static.SQUARESPACE_CONTEXT) {
+        const wid = window.Static.SQUARESPACE_CONTEXT.websiteId;
+        if (wid) return wid;
       }
+    } catch { /* ignore */ }
 
-      // Strategy 2: Embedded JSON in script tags
-      if (reviews.length === 0) {
-        const scripts = doc.querySelectorAll("script");
-        for (const script of scripts) {
-          const text = script.textContent || "";
-          if (text.includes("review") && text.includes("{")) {
-            try {
-              const jsonMatch = text.match(
-                /(?:reviews|reviewItems|storeReviews)\s*[:=]\s*(\[[\s\S]*?\])/
-              );
-              if (jsonMatch) {
-                const arr = JSON.parse(jsonMatch[1]);
-                for (const r of arr) {
-                  reviews.push({
-                    author:
-                      r.authorName ||
-                      r.author?.displayName ||
-                      r.reviewer ||
-                      "",
-                    body:
-                      r.body ||
-                      r.content ||
-                      r.reviewBody ||
-                      r.comment ||
-                      "",
-                    rating: String(r.rating || r.value || r.starRating || ""),
-                    title: r.title || "",
-                    date: r.addedOn || r.createdOn || r.date || "",
-                    email: r.email || r.authorEmail || "",
-                  });
-                }
-              }
-            } catch {
-              /* ignore parse errors */
-            }
-          }
-        }
+    // Method 2: data-context on product-reviews controller
+    try {
+      const el = document.querySelector('[data-controller="ProductReviewsController"]');
+      if (el && el.dataset.context) {
+        const ctx = JSON.parse(el.dataset.context);
+        if (ctx.websiteId) return ctx.websiteId;
       }
-    } catch (e) {
-      console.warn("[sqspc] Error extracting reviews: " + e.message);
+    } catch { /* ignore */ }
+
+    // Method 3: Search script tags for websiteId
+    try {
+      for (const script of document.querySelectorAll("script")) {
+        const text = script.textContent || "";
+        const m = text.match(/"websiteId"\s*:\s*"([a-f0-9-]+)"/);
+        if (m) return m[1];
+      }
+    } catch { /* ignore */ }
+
+    return "";
+  }
+
+  async function fetchReviewsViaAPI(websiteId, productId, crumb) {
+    const reviews = [];
+    if (!websiteId || !productId) return reviews;
+
+    const headers = {
+      "Content-type": "application/json; charset=UTF-8",
+    };
+    if (crumb) headers["X-CSRF-Token"] = crumb;
+
+    const PAGE_SIZE = 50;
+    let page = 0;
+    const MAX_PAGES = 20; // safety limit
+
+    while (page < MAX_PAGES) {
+      try {
+        const url =
+          "/api/commerce/product/reviews" +
+          "?websiteId=" + encodeURIComponent(websiteId) +
+          "&productId=" + encodeURIComponent(productId) +
+          "&page=" + page +
+          "&size=" + PAGE_SIZE;
+        const resp = await fetch(url, { headers, credentials: "same-origin" });
+        if (!resp.ok) break;
+        const data = await resp.json();
+        const batch = data.productReviews || [];
+        if (batch.length === 0) break;
+
+        for (const r of batch) {
+          const firstName = r.userFirstName || "";
+          const lastInitial = r.userLastName ? r.userLastName[0] : "";
+          const author = (firstName + (lastInitial ? " " + lastInitial : ""))
+            || r.userLoginName || "";
+
+          reviews.push({
+            author: author.trim(),
+            body: r.text || "",
+            rating: String(r.starRating || ""),
+            title: r.productName || "",
+            date: r.reviewDate || "",
+            email: "",
+            product_name: r.productName || "",
+            product_url: r.productURL || "",
+            source_type: r.sourceType || "",
+            image_urls: r.imageUrls || [],
+          });
+        }
+
+        if (batch.length < PAGE_SIZE) break;
+        page++;
+        await sleep(300);
+      } catch (e) {
+        console.warn("[sqspc] Review API error (page " + page + "): " + e.message);
+        break;
+      }
+    }
+    return reviews;
+  }
+
+  async function fetchStoreReviewsViaAPI(websiteId, crumb) {
+    const reviews = [];
+    if (!websiteId) return reviews;
+
+    const headers = {
+      "Content-type": "application/json; charset=UTF-8",
+    };
+    if (crumb) headers["X-CSRF-Token"] = crumb;
+
+    const PAGE_SIZE = 50;
+    let page = 0;
+    const MAX_PAGES = 20;
+
+    while (page < MAX_PAGES) {
+      try {
+        const url =
+          "/api/commerce/product/reviews" +
+          "?websiteId=" + encodeURIComponent(websiteId) +
+          "&page=" + page +
+          "&size=" + PAGE_SIZE;
+        const resp = await fetch(url, { headers, credentials: "same-origin" });
+        if (!resp.ok) break;
+        const data = await resp.json();
+        const batch = data.productReviews || [];
+        if (batch.length === 0) break;
+
+        for (const r of batch) {
+          const firstName = r.userFirstName || "";
+          const lastInitial = r.userLastName ? r.userLastName[0] : "";
+          const author = (firstName + (lastInitial ? " " + lastInitial : ""))
+            || r.userLoginName || "";
+
+          reviews.push({
+            author: author.trim(),
+            body: r.text || "",
+            rating: String(r.starRating || ""),
+            title: r.productName || "",
+            date: r.reviewDate || "",
+            email: "",
+            product_name: r.productName || "",
+            product_url: r.productURL || "",
+            source_type: r.sourceType || "",
+            image_urls: r.imageUrls || [],
+          });
+        }
+
+        if (batch.length < PAGE_SIZE) break;
+        page++;
+        await sleep(300);
+      } catch (e) {
+        console.warn("[sqspc] Store review API error (page " + page + "): " + e.message);
+        break;
+      }
     }
     return reviews;
   }
@@ -439,16 +513,74 @@
     await sleep(DELAY_MS);
   }
 
-  // Reviews are NOT extracted here — the JSON API and static HTML
-  // fetches cannot see JS-rendered review widgets.  Reviews are
-  // extracted by Playwright in Phase 2 (browser_extractor.py) which
-  // actually renders the page, scrolls down, clicks "Show All", and
-  // reads the live DOM.
+  // Phase 3: Extract reviews via Squarespace internal API
+  //
+  // Squarespace loads reviews client-side via ProductReviewsController
+  // which calls /api/commerce/product/reviews.  We call the same API
+  // directly — much more reliable than DOM scraping.
+  console.log("[sqspc] Phase 3: Extracting reviews via internal API...");
+  const websiteId = getWebsiteId();
+  const crumb = getCrumb();
+  const allReviews = [];
+
+  if (!websiteId) {
+    console.warn("[sqspc] Could not find websiteId — skipping API review extraction");
+    console.log("[sqspc] Reviews will be attempted by Playwright DOM fallback");
+  } else {
+    console.log("[sqspc] Found websiteId: " + websiteId);
+    console.log("[sqspc] Crumb token: " + (crumb ? "present" : "missing"));
+
+    // Strategy 1: Fetch product-specific reviews for each product
+    for (const product of products) {
+      if (!product.id) continue;
+      const reviews = await fetchReviewsViaAPI(websiteId, product.id, crumb);
+      for (const r of reviews) {
+        allReviews.push({
+          product_title: product.title,
+          product_handle: product.handle,
+          ...r,
+        });
+      }
+      if (reviews.length > 0) {
+        console.log("[sqspc]   " + product.title + ": " + reviews.length + " review(s)");
+      }
+      await sleep(300);
+    }
+
+    // Strategy 2: If no per-product reviews, try fetching all store reviews
+    if (allReviews.length === 0) {
+      console.log("[sqspc] No per-product reviews found, trying store-wide reviews...");
+      const storeReviews = await fetchStoreReviewsViaAPI(websiteId, crumb);
+      if (storeReviews.length > 0) {
+        console.log("[sqspc] Found " + storeReviews.length + " store review(s)");
+
+        // Match store reviews to products by product_url or product_name
+        for (const r of storeReviews) {
+          let matchedProduct = null;
+          if (r.product_url) {
+            matchedProduct = products.find(
+              (p) => p.url && r.product_url.includes(p.handle)
+            );
+          }
+          if (!matchedProduct && r.product_name) {
+            matchedProduct = products.find(
+              (p) => p.title && p.title.toLowerCase() === r.product_name.toLowerCase()
+            );
+          }
+          allReviews.push({
+            product_title: matchedProduct ? matchedProduct.title : r.product_name || "",
+            product_handle: matchedProduct ? matchedProduct.handle : "",
+            ...r,
+          });
+        }
+      }
+    }
+  }
 
   // Store result for Python to retrieve
-  console.log("[sqspc] Done: " + products.length + " products (reviews handled by Playwright)");
+  console.log("[sqspc] Done: " + products.length + " products, " + allReviews.length + " reviews");
   window.__SQSPC_RESULT = {
     products: products,
-    reviews: [],  // Playwright handles review extraction
+    reviews: allReviews,
   };
 })();

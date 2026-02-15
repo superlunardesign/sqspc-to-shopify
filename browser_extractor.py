@@ -24,27 +24,38 @@ _JS_PATH = Path(__file__).parent / "extract_inject.js"
 # ---------------------------------------------------------------------------
 # Common selectors for review widgets across Squarespace themes and
 # third-party review apps (Yotpo, Judge.me, Stamped, Loox, etc.)
+#
+# Squarespace native selectors come from the actual rendered DOM
+# (verified against real product page HTML):
+#   - Container: div.reviewDetails
+#   - Author:    dd.reviewName[data-testid="reviewer-name"]
+#   - Body:      dd.reviewDesc[data-testid="review-desc"]
+#   - Date:      dd.reviewDD[data-testid="review-date"]
+#   - Stars:     dd.reviewStars[data-testid="review-stars"]
+#   - Tabs:      button.reviewsTabButton[data-type="PRODUCT"|"STORE"]
 # ---------------------------------------------------------------------------
 
 # Buttons that expand / load all reviews
 SHOW_ALL_SELECTORS = [
-    # Squarespace native
+    # Squarespace native "Show More" (ProductReviewsController)
+    '.showMoreReviewsButton',
+    'button:has-text("Show More Reviews")',
+    # Squarespace review tab buttons (click to load product/store reviews)
+    'button.reviewsTabButton[data-type="PRODUCT"]',
+    'button.reviewsTabButton[data-type="STORE"]',
+    # Generic text-based
     'button:has-text("Show All")',
     'button:has-text("show all")',
     'a:has-text("Show All")',
     'button:has-text("See All Reviews")',
-    'button:has-text("See all reviews")',
     'a:has-text("See All Reviews")',
     'button:has-text("View All Reviews")',
-    'button:has-text("View all reviews")',
     'button:has-text("View All")',
     'a:has-text("View All")',
-    'button:has-text("Read All Reviews")',
     'button:has-text("Load More")',
     'button:has-text("load more")',
     'a:has-text("Load More")',
     'button:has-text("Show more")',
-    'button:has-text("show more")',
     'a:has-text("Show more")',
     'button:has-text("More Reviews")',
     'a:has-text("More Reviews")',
@@ -71,7 +82,11 @@ SHOW_ALL_SELECTORS = [
 
 # Containers that hold individual review items
 REVIEW_CONTAINER_SELECTORS = [
-    # Squarespace native
+    # Squarespace native (actual classes from rendered DOM)
+    'div.reviewDetails',
+    '.reviewsContainer dl',
+    '[data-testid="review-stamp"]',
+    # Squarespace generic
     '.review-item',
     '[data-testid="review-item"]',
     '.sqs-review',
@@ -87,15 +102,16 @@ REVIEW_CONTAINER_SELECTORS = [
     # Loox
     '.loox-review',
     # Generic
-    '.review',
-    '[class*="review-item"]',
-    '[class*="ReviewItem"]',
     '[data-review-id]',
 ]
 
 # Sub-selectors within a review item
 REVIEW_AUTHOR_SELECTORS = [
+    # Squarespace native
+    'dd.reviewName',
     '[data-testid="reviewer-name"]',
+    '.reviewName',
+    # Third-party
     '.review-author',
     '.reviewer-name',
     '.review-author-name',
@@ -107,7 +123,11 @@ REVIEW_AUTHOR_SELECTORS = [
 ]
 
 REVIEW_BODY_SELECTORS = [
+    # Squarespace native
+    'dd.reviewDesc',
     '[data-testid="review-desc"]',
+    '.reviewDesc',
+    # Third-party
     '.review-body',
     '.review-content',
     '.review-text',
@@ -120,7 +140,10 @@ REVIEW_BODY_SELECTORS = [
 ]
 
 REVIEW_DATE_SELECTORS = [
+    # Squarespace native
     '[data-testid="review-date"]',
+    '.reviewDD',
+    # Third-party
     '.review-date',
     '.yotpo-review-date',
     '.jdgm-rev__timestamp',
@@ -130,7 +153,11 @@ REVIEW_DATE_SELECTORS = [
 ]
 
 REVIEW_RATING_SELECTORS = [
+    # Squarespace native
+    'dd.reviewStars',
     '[data-testid="review-stars"]',
+    '.reviewStars',
+    # Third-party
     '.review-stars',
     '.star-rating',
     '.yotpo-review-stars',
@@ -143,6 +170,10 @@ REVIEW_RATING_SELECTORS = [
 ]
 
 REVIEW_TITLE_SELECTORS = [
+    # Squarespace native (product name linked from the review)
+    '[data-testid="review-product-name"]',
+    '.reviewTitle',
+    # Third-party
     '.review-title',
     '.yotpo-review-title',
     '.jdgm-rev__title',
@@ -188,14 +219,25 @@ def _click_show_all(page, log_lines: list) -> int:
 
 def _extract_rating(el) -> str:
     """Extract star rating from a review element."""
+    import re
+
     for selector in REVIEW_RATING_SELECTORS:
         try:
             stars_el = el.locator(selector).first
             if not stars_el.is_visible(timeout=200):
                 continue
 
-            # Method 1: Count filled/active star icons
+            # Method 1: Squarespace — sr-only label like "5.00 out of 5 stars"
+            sr_label = stars_el.locator("label.sr-only")
+            if sr_label.count() > 0:
+                label_text = sr_label.first.text_content(timeout=500) or ""
+                m = re.match(r"(\d+(?:\.\d+)?)", label_text)
+                if m:
+                    return m.group(1)
+
+            # Method 2: Count filled/active star icons
             for star_selector in [
+                "svg.star",  # Squarespace native — all SVG stars are filled
                 ".filled", ".star--filled", "[data-active]",
                 ".star.active", "[class*='filled']", "svg.filled",
             ]:
@@ -204,20 +246,19 @@ def _extract_rating(el) -> str:
                 if count > 0:
                     return str(count)
 
-            # Method 2: aria-label like "5 out of 5 stars"
+            # Method 3: aria-label on the container
             aria = stars_el.get_attribute("aria-label") or ""
-            import re
             m = re.match(r"(\d+(?:\.\d+)?)", aria)
             if m:
                 return m.group(1)
 
-            # Method 3: data attribute
+            # Method 4: data attribute
             for attr in ["data-rating", "data-score", "data-value"]:
                 val = stars_el.get_attribute(attr)
                 if val:
                     return val
 
-            # Method 4: style width percentage (e.g. width: 80% = 4 stars)
+            # Method 5: style width percentage (e.g. width: 80% = 4 stars)
             style = stars_el.get_attribute("style") or ""
             width_match = re.search(r"width:\s*([\d.]+)%", style)
             if width_match:
@@ -450,18 +491,27 @@ def extract_via_browser(
             )
 
             # -----------------------------------------------------------------
-            # Phase 2: Playwright-driven review extraction
+            # Phase 2 (fallback): Playwright DOM review extraction
             #
-            # The JS injection only handles products — reviews are rendered
-            # by third-party JS widgets that don't appear in the JSON API or
-            # static HTML.  Playwright visits each product page like a real
-            # user: scrolls down, clicks "Show All" / "Load More", and reads
-            # reviews straight from the live DOM.
+            # The JS injection now calls /api/commerce/product/reviews
+            # directly — the same internal API that Squarespace's own
+            # ProductReviewsController uses.  If that succeeded, we
+            # already have reviews.  Only fall back to DOM scraping if
+            # the API approach found nothing.
             # -----------------------------------------------------------------
-            if result["products"]:
-                log_lines.append("[sqspc] === Phase 2: Playwright review extraction ===")
-                log_lines.append("[sqspc] Visiting each product page to scroll, click 'Show All', and read reviews...")
-                logger.info("Browser extractor: starting Playwright review extraction for %d products", len(result["products"]))
+            if result["products"] and result["reviews"]:
+                logger.info(
+                    "Browser extractor: JS API extraction found %d reviews — skipping DOM fallback",
+                    len(result["reviews"]),
+                )
+                log_lines.append(
+                    f"[sqspc] Reviews extracted via /api/commerce/product/reviews: "
+                    f"{len(result['reviews'])} review(s)"
+                )
+            elif result["products"] and not result["reviews"]:
+                log_lines.append("[sqspc] === Phase 2: Playwright DOM review extraction (fallback) ===")
+                log_lines.append("[sqspc] API extraction found no reviews — trying DOM scraping...")
+                logger.info("Browser extractor: API found no reviews, trying Playwright DOM fallback")
 
                 all_reviews = []
                 for product in result["products"]:
@@ -471,22 +521,19 @@ def extract_via_browser(
 
                 result["reviews"] = all_reviews
                 logger.info(
-                    "Browser extractor: Playwright review extraction — %d reviews total",
+                    "Browser extractor: Playwright DOM extraction — %d reviews total",
                     len(all_reviews),
                 )
 
             # -----------------------------------------------------------------
             # Phase 3 (fallback): Screenshot + Claude vision
             #
-            # Only used if Playwright DOM extraction found nothing — the
-            # reviews might be inside a shadow DOM, iframe, or canvas that
-            # standard selectors can't reach.
+            # Only used if both API and DOM extraction found nothing.
             # -----------------------------------------------------------------
             has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
             if result["products"] and not result["reviews"] and has_api_key:
-                logger.info("Browser extractor: DOM extraction found no reviews, trying vision fallback")
+                logger.info("Browser extractor: no reviews from API or DOM, trying vision fallback")
                 log_lines.append("[sqspc] === Phase 3: Screenshot + AI vision fallback ===")
-                log_lines.append("[sqspc] DOM selectors found no reviews — screenshotting pages for AI to read...")
 
                 from vision_reviews import extract_reviews_via_screenshot
 
@@ -517,7 +564,7 @@ def extract_via_browser(
                 )
             elif result["products"] and not result["reviews"] and not has_api_key:
                 log_lines.append(
-                    "[sqspc] No reviews found via DOM selectors. Set ANTHROPIC_API_KEY "
+                    "[sqspc] No reviews found via API or DOM. Set ANTHROPIC_API_KEY "
                     "to enable screenshot + AI vision as a last resort."
                 )
 
