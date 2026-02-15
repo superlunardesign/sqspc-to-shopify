@@ -3,3 +3,4 @@ gunicorn==23.0.0
 requests==2.32.3
 beautifulsoup4==4.13.3
 playwright==1.49.1
+anthropic==0.42.0

@@ -611,6 +611,60 @@
       overflow-y: auto;
     }
 
+    /* ---- Mode toggle ---- */
+    .mode-toggle {
+      margin-bottom: 1.5rem;
+    }
+
+    .mode-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .mode-option {
+      display: block;
+      background: var(--bg);
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      text-transform: none;
+      letter-spacing: 0;
+      font-weight: 400;
+    }
+
+    .mode-option:hover {
+      border-color: var(--accent);
+    }
+
+    .mode-option.selected {
+      border-color: var(--accent);
+      background: rgba(108, 99, 255, 0.08);
+    }
+
+    .mode-option input[type="radio"] {
+      display: none;
+    }
+
+    .mode-label {
+      font-weight: 700;
+      font-size: 0.9rem;
+      margin-bottom: 0.2rem;
+      color: var(--text);
+    }
+
+    .mode-desc {
+      font-size: 0.75rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    @media (max-width: 768px) {
+      .mode-options { grid-template-columns: 1fr; }
+    }
+
     @media (max-width: 768px) {
       .detail-grid { grid-template-columns: 1fr; }
     }
@@ -1088,6 +1142,22 @@
             <input type="checkbox" name="test_mode">
             Test mode (1 product only)
           </label>
+        </div>
+
+        <div class="mode-toggle">
+          <label style="text-transform:uppercase;letter-spacing:0.05em;font-size:0.75rem;font-weight:700;color:var(--muted);margin-bottom:0.6rem;">Scrape Method</label>
+          <div class="mode-options">
+            <label class="mode-option selected" data-mode="browser">
+              <input type="radio" name="scrape_mode" value="browser" checked>
+              <div class="mode-label">Browser Mode</div>
+              <div class="mode-desc">Launches a real browser to load the site. Best compatibility — sees the page exactly as you do.</div>
+            </label>
+            <label class="mode-option" data-mode="api">
+              <input type="radio" name="scrape_mode" value="api">
+              <div class="mode-label">API Mode</div>
+              <div class="mode-desc">Direct HTTP requests to Squarespace JSON API. Faster, but may be blocked by some sites.</div>
+            </label>
+          </div>
         </div>
 
         <button type="submit" id="submitBtn" class="btn btn-full">Start Scraping</button>
@@ -1590,6 +1660,15 @@
       });
     }
 
+    // Mode toggle selection
+    document.querySelectorAll('.mode-option').forEach(opt => {
+      opt.addEventListener('click', () => {
+        document.querySelectorAll('.mode-option').forEach(o => o.classList.remove('selected'));
+        opt.classList.add('selected');
+        opt.querySelector('input[type="radio"]').checked = true;
+      });
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -1598,18 +1677,24 @@
       const scrapeReviews = form.querySelector('[name="scrape_reviews"]').checked;
       const scrapeProducts = form.querySelector('[name="scrape_products"]').checked;
       const testMode = form.querySelector('[name="test_mode"]').checked;
+      const scrapeMode = form.querySelector('[name="scrape_mode"]:checked').value;
 
       if (!siteUrl) return;
 
+      const isBrowserMode = scrapeMode === 'browser';
+      const endpoint = isBrowserMode ? '/scrape-browser' : '/scrape';
+
       submitBtn.disabled = true;
-      submitBtn.innerHTML = '<span class="spinner"></span> Scraping&hellip;';
+      submitBtn.innerHTML = '<span class="spinner"></span> ' + (isBrowserMode ? 'Launching browser&hellip;' : 'Scraping&hellip;');
       status.className = 'status-box info';
-      status.innerHTML = 'Connecting to Squarespace site and scraping products&hellip; This may take a few minutes for large stores.';
+      status.innerHTML = isBrowserMode
+        ? 'Launching headless browser and loading the Squarespace site&hellip; This uses a real browser for best compatibility.'
+        : 'Connecting to Squarespace site and scraping products&hellip; This may take a few minutes for large stores.';
       productTableWrap.style.display = 'none';
       reviewDebugWrap.style.display = 'none';
 
       try {
-        const resp = await fetch('/scrape', {
+        const resp = await fetch(endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1664,6 +1749,18 @@
         if (data.review_debug && data.review_debug.length > 0) {
           renderDebugLog(data.review_debug);
           reviewDebugWrap.style.display = 'block';
+        }
+
+        // Show browser console log if available (browser mode)
+        if (data.browser_log && data.browser_log.length > 0) {
+          const browserEntries = data.browser_log
+            .filter(line => line.startsWith('[sqspc]'))
+            .map(line => ({ label: line.replace('[sqspc] ', '') }));
+          if (browserEntries.length > 0) {
+            renderDebugLog(browserEntries);
+            reviewDebugWrap.style.display = 'block';
+            debugToggle.querySelector('h2').textContent = 'Browser Extraction Log';
+          }
         }
       } catch (err) {
         status.className = 'status-box error';

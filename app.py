@@ -13,6 +13,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
 
 from scraper import scrape_products, scrape_reviews
+from browser_extractor import extract_via_browser
 from exporter import export_products_csv, export_reviews_csv
 from merger import parse_shopify_csv, compare_products, merge_products
 
@@ -135,6 +136,98 @@ def scrape():
 
     except Exception as exc:
         logger.exception("Scrape failed")
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify(result)
+
+
+@app.route("/scrape-browser", methods=["POST"])
+def scrape_browser():
+    """Run the browser-based extractor using Playwright.
+
+    Launches a headless Chromium browser, navigates to the Squarespace
+    site, and injects a JS extraction script that runs with same-origin
+    access.  Returns the same response shape as /scrape so the UI can
+    use either endpoint interchangeably.
+    """
+    data = request.get_json(force=True)
+    site_url = (data.get("site_url") or "").strip().rstrip("/")
+    shop_path = (data.get("shop_path") or "/shop").strip()
+    test_mode = data.get("test_mode", False)
+
+    if not site_url:
+        return jsonify({"error": "site_url is required"}), 400
+
+    if not site_url.startswith("http"):
+        site_url = f"https://{site_url}"
+    if not shop_path.startswith("/"):
+        shop_path = f"/{shop_path}"
+
+    run_id = uuid.uuid4().hex[:12]
+    result = {"product_count": 0, "review_count": 0, "sold_out_count": 0}
+
+    try:
+        logger.info(
+            "Browser scrape: %s%s%s",
+            site_url, shop_path,
+            " (TEST MODE)" if test_mode else "",
+        )
+        raw = extract_via_browser(
+            site_url,
+            shop_path=shop_path,
+            max_products=1 if test_mode else 0,
+        )
+
+        products = raw.get("products", [])
+        reviews = raw.get("reviews", [])
+        result["product_count"] = len(products)
+        result["review_count"] = len(reviews)
+        result["sold_out_count"] = sum(
+            1 for p in products if p.get("sold_out")
+        )
+        result["browser_log"] = raw.get("log", [])
+
+        if products:
+            fname = f"products_{run_id}.csv"
+            fpath = OUTPUT_DIR / fname
+            with open(fpath, "w", newline="", encoding="utf-8") as f:
+                export_products_csv(products, f)
+            result["products_csv"] = fname
+            logger.info("Wrote %s (%d products)", fpath, len(products))
+
+            result["products"] = [
+                {
+                    "title": p.get("title", ""),
+                    "handle": p.get("handle", ""),
+                    "vendor": p.get("vendor", ""),
+                    "price": (p.get("variants") or [{}])[0].get("price", ""),
+                    "compare_at_price": (p.get("variants") or [{}])[0].get("compare_at_price", ""),
+                    "sku": (p.get("variants") or [{}])[0].get("sku", ""),
+                    "images": p.get("images", [])[:5],
+                    "tags": p.get("tags", []),
+                    "product_type": p.get("product_type", ""),
+                    "sold_out": p.get("sold_out", False),
+                    "variant_count": len(p.get("variants", [])),
+                    "description": p.get("description", "") or "",
+                    "ingredients": p.get("ingredients", "") or "",
+                    "how_to_use": p.get("how_to_use", "") or "",
+                    "benefits": p.get("benefits", "") or "",
+                    "what_it_is": p.get("what_it_is", "") or "",
+                    "who_its_for": p.get("who_its_for", "") or "",
+                }
+                for p in products
+            ]
+
+        if reviews:
+            fname = f"reviews_{run_id}.csv"
+            fpath = OUTPUT_DIR / fname
+            with open(fpath, "w", newline="", encoding="utf-8") as f:
+                export_reviews_csv(reviews, f)
+            result["reviews_csv"] = fname
+            logger.info("Wrote %s (%d reviews)", fpath, len(reviews))
+
+    except Exception as exc:
+        logger.exception("Browser scrape failed")
         return jsonify({"error": str(exc)}), 500
 
     return jsonify(result)
