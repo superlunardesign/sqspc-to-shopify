@@ -1,10 +1,13 @@
 """
 Vision-based review extraction using Playwright screenshots + Claude.
 
-When JS-rendered reviews are visible on the page but not extractable
-from the DOM or embedded JSON, this module takes a full-page screenshot
-with Playwright and sends it to Claude's vision API to read and parse
-the review content.
+Last-resort fallback: when the Playwright DOM extraction can't find
+review elements (e.g. reviews rendered inside a shadow DOM or canvas),
+this module takes a full-page screenshot and sends it to Claude's
+vision API to read the review content visually.
+
+Before screenshotting, it scrolls the page and clicks "Show All" /
+"Load More" buttons to ensure all reviews are visible.
 
 Requires:
   - ANTHROPIC_API_KEY environment variable
@@ -35,6 +38,49 @@ Example: [{"author": "Jane D.", "rating": 5, "title": "Amazing!", "body": "Love 
 
 If there are no reviews visible, return an empty array: []
 """
+
+# Reuse the same expand-button selectors from the main extractor
+_SHOW_ALL_SELECTORS = [
+    'button:has-text("Show All")',
+    'button:has-text("show all")',
+    'a:has-text("Show All")',
+    'button:has-text("See All Reviews")',
+    'button:has-text("View All Reviews")',
+    'button:has-text("Load More")',
+    'button:has-text("load more")',
+    'a:has-text("Load More")',
+    'button:has-text("Show more")',
+    'button:has-text("More Reviews")',
+    '.load-more-btn',
+    '.show-all-btn',
+    '.load-more',
+    '.yotpo-load-more',
+    '.jdgm-load-more',
+    '.stamped-load-more',
+]
+
+
+def _click_all_expand_buttons(page) -> int:
+    """Click expand/load-more buttons until none remain. Returns click count."""
+    total = 0
+    for _ in range(20):
+        clicked = False
+        for sel in _SHOW_ALL_SELECTORS:
+            try:
+                btn = page.locator(sel).first
+                if btn.is_visible(timeout=400):
+                    btn.scroll_into_view_if_needed()
+                    page.wait_for_timeout(200)
+                    btn.click()
+                    total += 1
+                    clicked = True
+                    page.wait_for_timeout(1500)
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            break
+    return total
 
 
 def extract_reviews_via_screenshot(
@@ -78,14 +124,21 @@ def extract_reviews_via_screenshot(
     try:
         logger.info("Vision reviews: navigating to %s", product_url)
         page.goto(product_url, wait_until="networkidle", timeout=30_000)
-        # Extra wait for lazy-loaded review widgets
         page.wait_for_timeout(4000)
 
-        # Scroll down to trigger any lazy-loading of review sections
+        # Scroll down to trigger lazy-loading of review sections
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.5)")
+        page.wait_for_timeout(1000)
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(2000)
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-        page.wait_for_timeout(1000)
+
+        # Click "Show All" / "Load More" buttons to expand all reviews
+        clicks = _click_all_expand_buttons(page)
+        if clicks:
+            logger.info("Vision reviews: clicked %d expand buttons on %s", clicks, product_title)
+            # Scroll again after expanding
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(1500)
 
         # Take a full-page screenshot
         screenshot_bytes = page.screenshot(full_page=True, type="png")
@@ -97,8 +150,7 @@ def extract_reviews_via_screenshot(
             product_title,
         )
 
-        # If the screenshot is very large (>10MB), it might be too big for the API.
-        # Take a cropped version focused on the lower portion where reviews usually are.
+        # If the screenshot is very large (>10MB), crop to the review area
         if len(screenshot_bytes) > 10 * 1024 * 1024:
             logger.info("Vision reviews: screenshot too large, taking bottom-half crop")
             page_height = page.evaluate("document.body.scrollHeight")
