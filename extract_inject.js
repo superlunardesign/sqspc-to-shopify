@@ -439,34 +439,16 @@
     await sleep(DELAY_MS);
   }
 
-  // Phase 3: Extract reviews
-  console.log("[sqspc] Phase 3: Extracting reviews...");
-  const allReviews = [];
-  for (const product of products) {
-    if (!product.url) continue;
-    const reviews = await extractReviewsFromPage(product.url);
-    for (const r of reviews) {
-      allReviews.push({
-        product_title: product.title,
-        product_handle: product.handle,
-        rating: r.rating,
-        title: r.title,
-        author: r.author,
-        email: r.email,
-        body: r.body,
-        created_at: r.date,
-      });
-    }
-    if (reviews.length > 0) {
-      console.log("[sqspc]   " + product.title + ": " + reviews.length + " review(s)");
-    }
-    await sleep(DELAY_MS / 2);
-  }
+  // Reviews are NOT extracted here — the JSON API and static HTML
+  // fetches cannot see JS-rendered review widgets.  Reviews are
+  // extracted by Playwright in Phase 2 (browser_extractor.py) which
+  // actually renders the page, scrolls down, clicks "Show All", and
+  // reads the live DOM.
 
   // Store result for Python to retrieve
-  console.log("[sqspc] Done: " + products.length + " products, " + allReviews.length + " reviews");
+  console.log("[sqspc] Done: " + products.length + " products (reviews handled by Playwright)");
   window.__SQSPC_RESULT = {
     products: products,
-    reviews: allReviews,
+    reviews: [],  // Playwright handles review extraction
   };
 })();

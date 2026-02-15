@@ -452,14 +452,16 @@ def extract_via_browser(
             # -----------------------------------------------------------------
             # Phase 2: Playwright-driven review extraction
             #
-            # Visit each product page, scroll down, click "Show All" / "Load
-            # More" buttons, then read reviews straight from the DOM.  This is
-            # the primary review strategy — it works like a human browsing the
-            # site.
+            # The JS injection only handles products — reviews are rendered
+            # by third-party JS widgets that don't appear in the JSON API or
+            # static HTML.  Playwright visits each product page like a real
+            # user: scrolls down, clicks "Show All" / "Load More", and reads
+            # reviews straight from the live DOM.
             # -----------------------------------------------------------------
-            if result["products"] and not result["reviews"]:
+            if result["products"]:
                 log_lines.append("[sqspc] === Phase 2: Playwright review extraction ===")
-                logger.info("Browser extractor: starting Playwright review extraction")
+                log_lines.append("[sqspc] Visiting each product page to scroll, click 'Show All', and read reviews...")
+                logger.info("Browser extractor: starting Playwright review extraction for %d products", len(result["products"]))
 
                 all_reviews = []
                 for product in result["products"]:
@@ -476,13 +478,15 @@ def extract_via_browser(
             # -----------------------------------------------------------------
             # Phase 3 (fallback): Screenshot + Claude vision
             #
-            # Only used if Playwright DOM extraction also found nothing, and an
-            # ANTHROPIC_API_KEY is available.
+            # Only used if Playwright DOM extraction found nothing — the
+            # reviews might be inside a shadow DOM, iframe, or canvas that
+            # standard selectors can't reach.
             # -----------------------------------------------------------------
             has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
             if result["products"] and not result["reviews"] and has_api_key:
                 logger.info("Browser extractor: DOM extraction found no reviews, trying vision fallback")
                 log_lines.append("[sqspc] === Phase 3: Screenshot + AI vision fallback ===")
+                log_lines.append("[sqspc] DOM selectors found no reviews — screenshotting pages for AI to read...")
 
                 from vision_reviews import extract_reviews_via_screenshot
 
@@ -513,8 +517,8 @@ def extract_via_browser(
                 )
             elif result["products"] and not result["reviews"] and not has_api_key:
                 log_lines.append(
-                    "[sqspc] No reviews found via DOM. Set ANTHROPIC_API_KEY to enable "
-                    "screenshot + AI vision as a last resort."
+                    "[sqspc] No reviews found via DOM selectors. Set ANTHROPIC_API_KEY "
+                    "to enable screenshot + AI vision as a last resort."
                 )
 
             browser.close()
