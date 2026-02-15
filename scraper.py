@@ -1080,7 +1080,7 @@ def _process_product(session: requests.Session, base_url: str, item: dict, shop_
                 "compare_at_price": "",
                 "weight": v.get("weight", ""),
                 "weight_unit": v.get("weightUnit", "POUNDS"),
-                "inventory_qty": v.get("qtyInStock", ""),
+                "inventory_qty": str(v.get("qtyInStock", "")) if v.get("qtyInStock") is not None else "",
                 "option_values": [],
             }
 

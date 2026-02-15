@@ -442,8 +442,16 @@
               : saleCents.toFixed(2);
         }
 
-        const qty = v.qtyInStock ?? v.stock ?? "";
-        const soldOut = v.soldOut ?? qty === 0;
+        const rawQty = v.qtyInStock ?? v.stock;
+        const qty = rawQty != null ? Number(rawQty) : null;
+        const unlimited = v.unlimited === true;
+        const soldOut = v.soldOut === true || (qty !== null && qty <= 0);
+
+        let inventoryQty = "";
+        if (soldOut) inventoryQty = "0";
+        else if (qty !== null) inventoryQty = String(qty);
+        // If unlimited or qty not provided, leave empty (Shopify treats
+        // blank Variant Inventory Qty as "don't track inventory")
 
         variants.push({
           sku: v.sku || "",
@@ -451,7 +459,7 @@
           compare_at_price: comparePrice,
           weight: String(v.weight ?? ""),
           weight_unit: v.weightUnit || "lb",
-          inventory_qty: soldOut ? "0" : String(qty),
+          inventory_qty: inventoryQty,
           option_values: optValues,
           image: cleanImageUrl(v.imageUrl || v.mainImageUrl || ""),
         });
